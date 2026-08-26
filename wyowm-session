@@ -1,0 +1,26 @@
+#!/bin/sh
+
+rm -f /tmp/wyowm.log /tmp/wyowm-spawn.log
+
+export XDG_SESSION_TYPE=wayland
+export XDG_CURRENT_DESKTOP=wyoWM
+export MOZ_ENABLE_WAYLAND=1
+export GDK_BACKEND=wayland
+export QT_QPA_PLATFORM=wayland
+export GTK_CSD=0
+export QT_WAYLAND_DISABLE_WINDOWDECORATION=1
+export MOZ_GTK_TITLEBAR_DECORATION=none
+export ELECTRON_OZONE_PLATFORM_HINT=wayland
+export SDL_VIDEODRIVER=wayland
+export _JAVA_AWT_WM_NONREPARENTING=1
+
+export XCURSOR_SIZE=24
+export XCURSOR_THEME=default
+export XCURSOR_PATH=~/.local/share/icons:~/.icons:/usr/share/icons:/usr/share/pixmaps
+
+if [ -z "$DBUS_SESSION_BUS_ADDRESS" ]; then
+    eval $(dbus-launch --sh-syntax)
+    export DBUS_SESSION_BUS_ADDRESS
+fi
+
+exec /usr/local/bin/wyowm >/tmp/wyowm.log 2>&1

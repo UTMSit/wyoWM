@@ -1,0 +1,6 @@
+[Desktop Entry]
+Name=wyoWM
+Comment=Lightweight wlroots Wayland compositor
+Exec=/usr/local/bin/wyowm-session
+Type=Application
+DesktopNames=wyoWM

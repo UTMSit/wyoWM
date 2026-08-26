@@ -1,0 +1,38 @@
+CC = gcc
+PKG_CONFIG = pkg-config
+PKG_MODULES = wayland-server wlroots-0.20 xkbcommon libinput libdrm gbm pixman-1 gdk-pixbuf-2.0
+CFLAGS = -O3 -Wall -Wextra -Werror -march=native -flto -DWLR_USE_UNSTABLE $(shell $(PKG_CONFIG) --cflags $(PKG_MODULES))
+LDFLAGS = $(shell $(PKG_CONFIG) --libs $(PKG_MODULES)) -lm -ldl
+
+SRCS = $(wildcard src/*.c)
+OBJS = $(SRCS:.c=.o)
+
+src/%.o: src/%.c
+	$(CC) $(CFLAGS) -c -o $@ $<
+eoc
+
+wyowm: $(OBJS)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+eoc
+
+build:
+	call wyowm
+eoc
+
+install:
+	call clean
+	call build
+	sudo install -Dm755 wyowm /usr/local/bin/wyowm
+	sudo install -Dm755 wyowm-session /usr/local/bin/wyowm-session
+	sudo install -Dm644 wyowm.desktop /usr/share/wayland-sessions/wyowm.desktop
+eoc
+
+uninstall:
+	sudo rm -f /usr/local/bin/wyowm
+	sudo rm -f /usr/local/bin/wyowm-session
+	sudo rm -f /usr/share/wayland-sessions/wyowm.desktop
+eoc
+
+clean:
+	rm -f src/*.o src/*.d wyowm
+eoc
