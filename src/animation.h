@@ -22,6 +22,7 @@ typedef struct {
     bool active;
 } AnimatedValue;
 
+double clamp01(double v);
 void animation_init(AnimatedValue *value, double initial);
 void animation_set_target(AnimatedValue *value, double target, int duration_ms, EasingCurve curve);
 void animation_update(AnimatedValue *value, int64_t now_ms);

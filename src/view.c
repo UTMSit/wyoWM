@@ -144,6 +144,15 @@ void view_apply_opacity(View *view) {
     wlr_scene_node_for_each_buffer(&view->scene_tree->node, apply_buffer_opacity, &opacity);
 }
 
+static void view_schedule_frame(View *view) {
+    if (!view || !view->server || view->server->shutting_down) return;
+
+    Output *out = view->output ? view->output : view->server->active_output;
+    if (out && out->wlr_output && out->wlr_output->enabled) {
+        wlr_output_schedule_frame(out->wlr_output);
+    }
+}
+
 static const float fallback_border_focused[4] = { 0.4f, 0.6f, 1.0f, 1.0f };
 static const float fallback_border_unfocused[4] = { 0.3f, 0.3f, 0.35f, 1.0f };
 
@@ -202,53 +211,52 @@ static void view_update_border(View *view, bool focused) {
         }
     }
 
+    view_schedule_frame(view);
+
     if (!enabled) return;
 
     int w = view->width;
     int h = view->height;
 
     int radius = 0;
-
     if (view->server && corner_radius_supported()) {
         radius = (int)lround(view->server->config.corner_radius);
     }
-
     if (radius < 0) radius = 0;
     if (radius > w / 2) radius = w / 2;
     if (radius > h / 2) radius = h / 2;
 
     int horizontal_width = w + border_width * 2 - radius * 2;
     int vertical_height = h - radius * 2;
-
     if (horizontal_width < 0) horizontal_width = 0;
     if (vertical_height < 0) vertical_height = 0;
 
     if (view->border[0]) {
         wlr_scene_rect_set_size(view->border[0], horizontal_width, border_width);
         wlr_scene_node_set_position(&view->border[0]->node,
-                                     -border_width + radius,
-                                     -border_width);
+            -border_width + radius,
+            -border_width);
     }
 
     if (view->border[1]) {
         wlr_scene_rect_set_size(view->border[1], horizontal_width, border_width);
         wlr_scene_node_set_position(&view->border[1]->node,
-                                     -border_width + radius,
-                                     h);
+            -border_width + radius,
+            h);
     }
 
     if (view->border[2]) {
         wlr_scene_rect_set_size(view->border[2], border_width, vertical_height);
         wlr_scene_node_set_position(&view->border[2]->node,
-                                     -border_width,
-                                     radius);
+            -border_width,
+            radius);
     }
 
     if (view->border[3]) {
         wlr_scene_rect_set_size(view->border[3], border_width, vertical_height);
         wlr_scene_node_set_position(&view->border[3]->node,
-                                     w,
-                                     radius);
+            w,
+            radius);
     }
 
     const float *color = focused ? focused_color : unfocused_color;
@@ -306,6 +314,7 @@ View *view_create_xdg(Server *server, struct wlr_xdg_surface *xdg_surface, struc
     animation_init(&view->opacity, 1.0);
     animation_init(&view->anim_x, 0.0);
     animation_init(&view->anim_y, 0.0);
+    animation_init(&view->border_blend, 0.0);
 
     xdg_surface->data = view;
     wl_list_init(&view->link);
@@ -561,58 +570,69 @@ void view_set_opacity(View *view, double opacity) {
 }
 
 void view_focus(View *view) {
-	if (!view) return;
-	if (view->root_tree) {
-		wlr_scene_node_raise_to_top(&view->root_tree->node);
-	} else if (view->scene_tree) {
-		wlr_scene_node_raise_to_top(&view->scene_tree->node);
-	}
-	if (view->type == VIEW_TYPE_XDG && view->xdg.toplevel && view->xdg.xdg_surface && view->xdg.xdg_surface->initialized) {
-		wlr_xdg_toplevel_set_activated(view->xdg.toplevel, true);
-	}
-	double opacity = 1.0;
-	int duration = 0;
-	if (view->server) {
-		opacity = view->server->config.active_opacity;
-		duration = view->server->config.animation_duration_ms;
-	}
-	if (opacity < 0.0) opacity = 0.0;
-	if (opacity > 1.0) opacity = 1.0;
-	if (duration < 0) duration = 0;
-	if (duration > 0) {
-		animation_set_target(&view->opacity, opacity, duration, EASING_EASE_OUT);
-		if (view->output) {
-			wlr_output_schedule_frame(view->output->wlr_output);
-		}
-	} else {
-		view_set_opacity(view, opacity);
-	}
-	view_update_border(view, true);
+    if (!view) return;
+
+    if (view->root_tree) {
+        wlr_scene_node_raise_to_top(&view->root_tree->node);
+    } else if (view->scene_tree) {
+        wlr_scene_node_raise_to_top(&view->scene_tree->node);
+    }
+
+    if (view->type == VIEW_TYPE_XDG && view->xdg.toplevel && view->xdg.xdg_surface && view->xdg.xdg_surface->initialized) {
+        wlr_xdg_toplevel_set_activated(view->xdg.toplevel, true);
+    }
+
+    double opacity = 1.0;
+    int duration = 0;
+    if (view->server) {
+        opacity = view->server->config.active_opacity;
+        duration = view->server->config.animation_duration_ms;
+    }
+    if (opacity < 0.0) opacity = 0.0;
+    if (opacity > 1.0) opacity = 1.0;
+    if (duration < 0) duration = 0;
+
+    if (duration > 0) {
+        animation_set_target(&view->opacity, opacity, duration, EASING_EASE_OUT);
+    } else {
+        view_set_opacity(view, opacity);
+    }
+
+    view_update_border(view, true);
+
+    if (view->output) {
+        wlr_output_schedule_frame(view->output->wlr_output);
+    }
 }
 
 void view_unfocus(View *view) {
-	if (!view) return;
-	if (view->type == VIEW_TYPE_XDG && view->xdg.toplevel && view->xdg.xdg_surface && view->xdg.xdg_surface->initialized) {
-		wlr_xdg_toplevel_set_activated(view->xdg.toplevel, false);
-	}
-	double opacity = 1.0;
-	int duration = 0;
-	if (view->server) {
-		opacity = view->server->config.inactive_opacity;
-		duration = view->server->config.animation_duration_ms;
-	}
-	if (opacity < 0.0) opacity = 0.0;
-	if (opacity > 1.0) opacity = 1.0;
-	if (duration < 0) duration = 0;
-	if (duration > 0) {
-		animation_set_target(&view->opacity, opacity, duration, EASING_EASE_OUT);
-		if (view->output) {
-			wlr_output_schedule_frame(view->output->wlr_output);
-		}
-	} else {
-		view_set_opacity(view, opacity);
-	}
-	view_update_border(view, false);
+    if (!view) return;
+
+    if (view->type == VIEW_TYPE_XDG && view->xdg.toplevel && view->xdg.xdg_surface && view->xdg.xdg_surface->initialized) {
+        wlr_xdg_toplevel_set_activated(view->xdg.toplevel, false);
+    }
+
+    double opacity = 1.0;
+    int duration = 0;
+    if (view->server) {
+        opacity = view->server->config.inactive_opacity;
+        duration = view->server->config.animation_duration_ms;
+    }
+    if (opacity < 0.0) opacity = 0.0;
+    if (opacity > 1.0) opacity = 1.0;
+    if (duration < 0) duration = 0;
+
+    if (duration > 0) {
+        animation_set_target(&view->opacity, opacity, duration, EASING_EASE_OUT);
+    } else {
+        view_set_opacity(view, opacity);
+    }
+
+    view_update_border(view, false);
+
+    if (view->output) {
+        wlr_output_schedule_frame(view->output->wlr_output);
+    }
 }
 
 static void handle_toplevel_destroy(struct wl_listener *listener, void *data) {
@@ -631,13 +651,22 @@ static void handle_toplevel_destroy(struct wl_listener *listener, void *data) {
 static void handle_map(struct wl_listener *listener, void *data) {
     View *view = wl_container_of(listener, view, xdg.map);
     (void)data;
-
     if (!view || !view->server || view->server->shutting_down) return;
-
     view->mapped = true;
-
     if (view->scene_tree) {
         wlr_scene_node_set_enabled(&view->scene_tree->node, true);
+    }
+
+    int duration = view->server->config.animation_duration_ms;
+    if (duration < 0) duration = 0;
+
+    if (duration > 0) {
+        double target_opacity = view->server->config.active_opacity;
+        if (target_opacity < 0.0) target_opacity = 0.0;
+        if (target_opacity > 1.0) target_opacity = 1.0;
+        animation_set_target(&view->opacity, 0.0, 0, EASING_LINEAR);
+        view_apply_opacity(view);
+        animation_set_target(&view->opacity, target_opacity, duration, EASING_EASE_OUT);
     }
 
     server_view_mapped(view->server, view);
@@ -811,16 +840,26 @@ void view_move_by(View *view, int dx, int dy) {
 bool view_frame_update(View *view, int64_t now_ms) {
     if (!view) return false;
 
+    bool active = false;
+
     if (view->anim_x.active || view->anim_y.active) {
         animation_update(&view->anim_x, now_ms);
         animation_update(&view->anim_y, now_ms);
         view_apply_geometry(view);
+        active = true;
     }
 
     if (view->opacity.active) {
         animation_update(&view->opacity, now_ms);
         view_apply_opacity(view);
+        active = true;
     }
 
-    return view->anim_x.active || view->anim_y.active || view->opacity.active;
+    if (view->border_blend.active) {
+        animation_update(&view->border_blend, now_ms);
+        view_update_border(view, view->border_blend.target > 0.5);
+        active = true;
+    }
+
+    return active;
 }

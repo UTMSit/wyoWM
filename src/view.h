@@ -71,6 +71,7 @@ typedef struct View {
     struct wlr_xdg_toplevel_decoration_v1 *decoration;
     bool decoration_mode_set;
     struct wl_listener decoration_destroy;
+    AnimatedValue border_blend;
 } View;
 
 View *view_create_xdg(struct Server *server, struct wlr_xdg_surface *xdg_surface, struct wlr_xdg_toplevel *toplevel);

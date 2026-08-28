@@ -356,7 +356,7 @@ void config_init_defaults(Config *config) {
     config->corner_radius = 0.0;
     config->active_opacity = 1.0;
     config->inactive_opacity = 1.0;
-    config->animation_duration_ms = 160;
+    config->animation_duration_ms = 190;
     config->wallpaper_mode = WALLPAPER_MODE_FILL;
     config->has_keybinds = false;
 
