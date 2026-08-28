@@ -1,0 +1,8 @@
+#!/bin/sh
+PID=$(pgrep -x wyowm)
+if [ -z "$PID" ]; then
+    echo "wyowm is not running"
+    exit 1
+fi
+kill -USR1 "$PID"
+echo "Config reloaded"

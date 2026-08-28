@@ -44,7 +44,12 @@ server_arrange(layer->server);
 static void handle_layer_commit(struct wl_listener *listener, void *data) {
     LayerSurface *layer = wl_container_of(listener, layer, commit);
     (void)data;
-    server_arrange(layer->server);
+
+    if (!layer->server || layer->server->shutting_down) return;
+
+    if (layer_shell_arrange(layer->server)) {
+        server_arrange(layer->server);
+    }
 }
 
 static void handle_layer_destroy(struct wl_listener *listener, void *data) {
@@ -166,45 +171,72 @@ void layer_shell_destroy(Server *server) {
     wl_list_init(&server->layer_surfaces);
 }
 
-void layer_shell_arrange(Server *server) {
-	if (!server) return;
-	Output *output;
-	wl_list_for_each(output, &server->outputs, link) {
-		struct wlr_box full_area = {
-			.x = output->x,
-			.y = output->y,
-			.width = output->width,
-			.height = output->height
-		};
-		struct wlr_box usable_area = full_area;
-		for (uint32_t layer = 0; layer <= 3; layer++) {
-			LayerSurface *ls;
-			wl_list_for_each(ls, &server->layer_surfaces, link) {
-				if (!ls->scene || !ls->layer_surface) continue;
-				if (ls->layer_surface->current.layer != layer) continue;
-				struct wlr_output *surface_output = ls->layer_surface->output;
-				if (!surface_output) {
-					Output *chosen = server->active_output ? server->active_output : output;
-					if (chosen != output) continue;
-					ls->layer_surface->output = chosen->wlr_output;
-					surface_output = chosen->wlr_output;
-				}
-				if (surface_output != output->wlr_output) continue;
-				if (!ls->layer_surface->initialized) continue;
-				if (ls->mapped) {
-					wlr_scene_layer_surface_v1_configure(ls->scene, &full_area, &usable_area);
-					wlr_scene_node_raise_to_top(&ls->scene->tree->node);
-				} else {
-					struct wlr_box dummy = usable_area;
-					wlr_scene_layer_surface_v1_configure(ls->scene, &full_area, &dummy);
-				}
-			}
-		}
-		if (usable_area.width < 0) usable_area.width = 0;
-		if (usable_area.height < 0) usable_area.height = 0;
-		output->usable_x = usable_area.x - output->x;
-		output->usable_y = usable_area.y - output->y;
-		output->usable_width = usable_area.width;
-		output->usable_height = usable_area.height;
-	}
+bool layer_shell_arrange(Server *server) {
+    if (!server) return false;
+
+    bool changed = false;
+    Output *output;
+
+    wl_list_for_each(output, &server->outputs, link) {
+        int old_usable_x = output->usable_x;
+        int old_usable_y = output->usable_y;
+        int old_usable_width = output->usable_width;
+        int old_usable_height = output->usable_height;
+
+        struct wlr_box full_area = {
+            .x = output->x,
+            .y = output->y,
+            .width = output->width,
+            .height = output->height
+        };
+
+        struct wlr_box usable_area = full_area;
+
+        for (uint32_t layer = 0; layer <= 3; layer++) {
+            LayerSurface *ls;
+
+            wl_list_for_each(ls, &server->layer_surfaces, link) {
+                if (!ls->scene || !ls->layer_surface) continue;
+                if (ls->layer_surface->current.layer != layer) continue;
+
+                struct wlr_output *surface_output = ls->layer_surface->output;
+
+                if (!surface_output) {
+                    Output *chosen = server->active_output ? server->active_output : output;
+                    if (chosen != output) continue;
+
+                    ls->layer_surface->output = chosen->wlr_output;
+                    surface_output = chosen->wlr_output;
+                }
+
+                if (surface_output != output->wlr_output) continue;
+                if (!ls->layer_surface->initialized) continue;
+
+                if (ls->mapped) {
+                    wlr_scene_layer_surface_v1_configure(ls->scene, &full_area, &usable_area);
+                    wlr_scene_node_raise_to_top(&ls->scene->tree->node);
+                } else {
+                    struct wlr_box dummy = usable_area;
+                    wlr_scene_layer_surface_v1_configure(ls->scene, &full_area, &dummy);
+                }
+            }
+        }
+
+        if (usable_area.width < 0) usable_area.width = 0;
+        if (usable_area.height < 0) usable_area.height = 0;
+
+        output->usable_x = usable_area.x - output->x;
+        output->usable_y = usable_area.y - output->y;
+        output->usable_width = usable_area.width;
+        output->usable_height = usable_area.height;
+
+        if (output->usable_x != old_usable_x ||
+            output->usable_y != old_usable_y ||
+            output->usable_width != old_usable_width ||
+            output->usable_height != old_usable_height) {
+            changed = true;
+        }
+    }
+
+    return changed;
 }

@@ -117,6 +117,9 @@ bool wallpaper_load_file(
         fprintf(stderr, "wyoWM: wallpaper: wlr_renderer_begin_buffer_pass failed\n");
     }
     wlr_buffer_unlock(buf);
+
+    (void)wlr_buffer_lock(buf);
+
     wlr_texture_destroy(texture);
 
     *buffer = buf;

@@ -77,6 +77,10 @@ static bool spawn_command(const char *command) {
     return true;
 }
 
+void input_spawn_command(const char *command) {
+	spawn_command(command);
+}
+
 static Output *find_output_in_direction(Server *server, Output *current, int dir) {
     if (!server || !current) return NULL;
 
@@ -249,16 +253,14 @@ static void move_view_in_direction(Server *server, int dir) {
     }
 
     if (view->tiled && view->output) {
+        dwindle_focus(&view->output->layout, view);
+
         if (dwindle_move_view(&view->output->layout, dx, dy)) {
             View *moved = dwindle_focused_view(&view->output->layout);
             if (moved) {
                 server_focus_view(server, moved);
             }
-
-            if (view->output) {
-                wlr_output_schedule_frame(view->output->wlr_output);
-            }
-
+            server_arrange(server);
             return;
         }
     }
@@ -479,33 +481,56 @@ static struct wlr_surface *surface_at_cursor(Server *server, double *sx, double 
 }
 
 static void process_cursor(Server *server, uint64_t time_msec) {
-if (server->shutting_down) return;
-double sx = 0.0;
-double sy = 0.0;
-struct wlr_surface *surface = surface_at_cursor(server, &sx, &sy);
-View *view = view_from_surface(server, surface);
-Output *cursor_output = output_at(server, server->cursor->x, server->cursor->y);
-if (view) {
-if (server->focused_view != view || server->focused_surface) {
-server_focus_view(server, view);
-}
-if (surface) {
-wlr_seat_pointer_notify_enter(server->seat, surface, sx, sy);
-wlr_seat_pointer_notify_motion(server->seat, time_msec, sx, sy);
-}
-return;
-}
-if (cursor_output) {
-server->active_output = cursor_output;
-}
-if (!surface) {
-server_focus_view(server, NULL);
-wlr_seat_keyboard_notify_clear_focus(server->seat);
-wlr_seat_pointer_clear_focus(server->seat);
-return;
-}
-wlr_seat_pointer_notify_enter(server->seat, surface, sx, sy);
-wlr_seat_pointer_notify_motion(server->seat, time_msec, sx, sy);
+    if (server->shutting_down) return;
+
+    double sx = 0.0;
+    double sy = 0.0;
+    struct wlr_surface *surface = surface_at_cursor(server, &sx, &sy);
+
+    if (surface) {
+        View *view = view_from_surface(server, surface);
+
+        if (view) {
+            if (server->focused_view != view || server->focused_surface) {
+                server_focus_view(server, view);
+            }
+        }
+
+        wlr_seat_pointer_notify_enter(server->seat, surface, sx, sy);
+        wlr_seat_pointer_notify_motion(server->seat, time_msec, sx, sy);
+        wlr_seat_pointer_notify_frame(server->seat);
+        return;
+    }
+
+    View *view = NULL;
+    View *v;
+    wl_list_for_each(v, &server->views, link) {
+        if (!v->mapped || v->fullscreen) continue;
+        if (server->cursor->x >= v->x && server->cursor->x < v->x + v->width &&
+            server->cursor->y >= v->y && server->cursor->y < v->y + v->height) {
+            view = v;
+            break;
+        }
+    }
+
+    Output *cursor_output = output_at(server, server->cursor->x, server->cursor->y);
+    if (cursor_output) {
+        server->active_output = cursor_output;
+    }
+
+    if (view) {
+        if (server->focused_view != view || server->focused_surface) {
+            server_focus_view(server, view);
+        }
+        wlr_seat_pointer_clear_focus(server->seat);
+        wlr_seat_pointer_notify_frame(server->seat);
+        return;
+    }
+
+    server_focus_view(server, NULL);
+    wlr_seat_keyboard_notify_clear_focus(server->seat);
+    wlr_seat_pointer_clear_focus(server->seat);
+    wlr_seat_pointer_notify_frame(server->seat);
 }
 
 static void process_drag(Server *server) {
@@ -562,13 +587,111 @@ static void process_drag(Server *server) {
     }
 }
 
+static void handle_drag_destroy(struct wl_listener *listener, void *data) {
+    Server *server = wl_container_of(listener, server, drag_destroy);
+    (void)data;
+
+    if (server->drag_icon_tree) {
+        wlr_scene_node_destroy(&server->drag_icon_tree->node);
+        server->drag_icon_tree = NULL;
+    }
+
+    server->dnd_active = false;
+    server->dnd_drag = NULL;
+
+    wl_list_remove(&server->drag_focus.link);
+    wl_list_init(&server->drag_focus.link);
+
+    wl_list_remove(&server->drag_motion.link);
+    wl_list_init(&server->drag_motion.link);
+
+    wl_list_remove(&server->drag_drop.link);
+    wl_list_init(&server->drag_drop.link);
+
+    wl_list_remove(&server->drag_destroy.link);
+    wl_list_init(&server->drag_destroy.link);
+}
+
+static void handle_drag_motion(struct wl_listener *listener, void *data) {
+    Server *server = wl_container_of(listener, server, drag_motion);
+    (void)data;
+
+    if (server->drag_icon_tree) {
+        wlr_scene_node_set_position(
+            &server->drag_icon_tree->node,
+            (int)server->cursor->x,
+            (int)server->cursor->y
+        );
+    }
+}
+
+static void handle_drag_drop(struct wl_listener *listener, void *data) {
+	(void)listener;
+	(void)data;
+}
+
+static void handle_drag_focus(struct wl_listener *listener, void *data) {
+	(void)listener;
+	(void)data;
+}
+
+static void handle_start_drag(struct wl_listener *listener, void *data) {
+    Server *server = wl_container_of(listener, server, start_drag);
+    struct wlr_drag *drag = data;
+
+    server->dnd_active = true;
+    server->dnd_drag = drag;
+
+    server->drag_focus.notify = handle_drag_focus;
+    wl_signal_add(&drag->events.focus, &server->drag_focus);
+
+    server->drag_motion.notify = handle_drag_motion;
+    wl_signal_add(&drag->events.motion, &server->drag_motion);
+
+    server->drag_drop.notify = handle_drag_drop;
+    wl_signal_add(&drag->events.drop, &server->drag_drop);
+
+    server->drag_destroy.notify = handle_drag_destroy;
+    wl_signal_add(&drag->events.destroy, &server->drag_destroy);
+
+    if (drag->icon && drag->icon->surface) {
+        server->drag_icon_tree = wlr_scene_tree_create(&server->scene->tree);
+        if (server->drag_icon_tree) {
+            wlr_scene_subsurface_tree_create(server->drag_icon_tree, drag->icon->surface);
+            wlr_scene_node_raise_to_top(&server->drag_icon_tree->node);
+            wlr_scene_node_set_position(
+                &server->drag_icon_tree->node,
+                (int)server->cursor->x,
+                (int)server->cursor->y
+            );
+        }
+    }
+}
+
+static void handle_request_start_drag(struct wl_listener *listener, void *data) {
+	Server *server = wl_container_of(listener, server, request_start_drag);
+	struct wlr_seat_request_start_drag_event *event = data;
+	if (wlr_seat_validate_pointer_grab_serial(server->seat, event->origin, event->serial)) {
+		wlr_seat_start_pointer_drag(server->seat, event->drag, event->serial);
+	} else {
+		wlr_data_source_destroy(event->drag->source);
+	}
+}
+
 static void handle_cursor_motion(struct wl_listener *listener, void *data) {
     Server *server = wl_container_of(listener, server, cursor_motion);
     struct wlr_pointer_motion_event *event = data;
-
     if (server->shutting_down) return;
 
     wlr_cursor_move(server->cursor, &event->pointer->base, event->delta_x, event->delta_y);
+
+    if (server->drag_icon_tree) {
+        wlr_scene_node_set_position(
+            &server->drag_icon_tree->node,
+            (int)server->cursor->x,
+            (int)server->cursor->y
+        );
+    }
 
     if (server->drag.active) {
         process_drag(server);
@@ -580,10 +703,17 @@ static void handle_cursor_motion(struct wl_listener *listener, void *data) {
 static void handle_cursor_motion_absolute(struct wl_listener *listener, void *data) {
     Server *server = wl_container_of(listener, server, cursor_motion_absolute);
     struct wlr_pointer_motion_absolute_event *event = data;
-
     if (server->shutting_down) return;
 
     wlr_cursor_warp_absolute(server->cursor, &event->pointer->base, event->x, event->y);
+
+    if (server->drag_icon_tree) {
+        wlr_scene_node_set_position(
+            &server->drag_icon_tree->node,
+            (int)server->cursor->x,
+            (int)server->cursor->y
+        );
+    }
 
     if (server->drag.active) {
         process_drag(server);
@@ -593,19 +723,23 @@ static void handle_cursor_motion_absolute(struct wl_listener *listener, void *da
 }
 
 static bool surface_allows_keyboard(Server *server, struct wlr_surface *surface) {
-	LayerSurface *layer;
-	wl_list_for_each(layer, &server->layer_surfaces, link) {
-		if (layer->layer_surface && layer->layer_surface->surface == surface) {
-			return layer->layer_surface->current.keyboard_interactive != 0;
-		}
-	}
-	return true;
+    if (!surface) return false;
+
+    struct wlr_surface *root = wlr_surface_get_root_surface(surface);
+
+    LayerSurface *layer;
+    wl_list_for_each(layer, &server->layer_surfaces, link) {
+        if (layer->layer_surface && layer->layer_surface->surface == root) {
+            return layer->layer_surface->current.keyboard_interactive != 0;
+        }
+    }
+
+    return true;
 }
 
 static void handle_cursor_button(struct wl_listener *listener, void *data) {
     Server *server = wl_container_of(listener, server, cursor_button);
     struct wlr_pointer_button_event *event = data;
-
     if (server->shutting_down) return;
 
     uint32_t modifiers = 0;
@@ -615,63 +749,79 @@ static void handle_cursor_button(struct wl_listener *listener, void *data) {
 
     bool super_pressed = (modifiers & WLR_MODIFIER_LOGO) != 0;
 
-    if (super_pressed &&
-        event->state == WL_POINTER_BUTTON_STATE_PRESSED &&
-        server->focused_view &&
-        !server->focused_view->fullscreen) {
-        View *view = server->focused_view;
+    if (super_pressed && event->state == WL_POINTER_BUTTON_STATE_PRESSED) {
+        double sx = 0.0;
+        double sy = 0.0;
+        struct wlr_surface *surface = surface_at_cursor(server, &sx, &sy);
+        View *view = surface ? view_from_surface(server, surface) : NULL;
 
-        bool start_drag = false;
-
-        if (event->button == BTN_LEFT) {
-            server->drag.move = true;
-            server->drag.resize = false;
-            start_drag = true;
-        } else if (event->button == BTN_RIGHT) {
-            server->drag.move = false;
-            server->drag.resize = true;
-            start_drag = true;
+        if (!view && !surface) {
+            View *v;
+            wl_list_for_each(v, &server->views, link) {
+                if (!v->mapped || v->fullscreen) continue;
+                if (server->cursor->x >= v->x && server->cursor->x < v->x + v->width &&
+                    server->cursor->y >= v->y && server->cursor->y < v->y + v->height) {
+                    view = v;
+                    break;
+                }
+            }
         }
 
-        if (start_drag) {
-            server->drag.active = true;
-            server->drag.view = view;
-            server->drag.output = view->output;
-            server->drag.grab_x = server->cursor->x;
-            server->drag.grab_y = server->cursor->y;
-            server->drag.last_x = server->cursor->x;
-            server->drag.last_y = server->cursor->y;
-            server->drag.restore_tiled = false;
-            server->drag.tiled_resize = false;
+        if (view && !view->fullscreen) {
+            bool start_drag = false;
 
-            int offset_x = 0;
-            int offset_y = 0;
-
-            if (view->output) {
-                offset_x = view->output->x;
-                offset_y = view->output->y;
+            if (event->button == BTN_LEFT) {
+                server->drag.move = true;
+                server->drag.resize = false;
+                start_drag = true;
+            } else if (event->button == BTN_RIGHT) {
+                server->drag.move = false;
+                server->drag.resize = true;
+                start_drag = true;
             }
 
-            server->drag.orig_x = view->x - offset_x;
-            server->drag.orig_y = view->y - offset_y;
-            server->drag.orig_width = view->width;
-            server->drag.orig_height = view->height;
+            if (start_drag) {
+                server_focus_view(server, view);
 
-            if (server->drag.move) {
-                if (view->tiled && view->output) {
-                    dwindle_remove_view(&view->output->layout, view);
-                    view->tiled = false;
-                    view->floating = true;
-                    server->drag.restore_tiled = true;
-                    server_arrange(server);
+                server->drag.active = true;
+                server->drag.view = view;
+                server->drag.output = view->output;
+                server->drag.grab_x = server->cursor->x;
+                server->drag.grab_y = server->cursor->y;
+                server->drag.last_x = server->cursor->x;
+                server->drag.last_y = server->cursor->y;
+                server->drag.restore_tiled = false;
+                server->drag.tiled_resize = false;
+
+                int offset_x = 0;
+                int offset_y = 0;
+                if (view->output) {
+                    offset_x = view->output->x;
+                    offset_y = view->output->y;
                 }
-            } else if (server->drag.resize) {
-                if (view->tiled && view->output) {
-                    server->drag.tiled_resize = true;
+
+                server->drag.orig_x = view->x - offset_x;
+                server->drag.orig_y = view->y - offset_y;
+                server->drag.orig_width = view->width;
+                server->drag.orig_height = view->height;
+
+                if (server->drag.move) {
+                    if (view->tiled && view->output) {
+                        dwindle_remove_view(&view->output->layout, view);
+                        view->tiled = false;
+                        view->floating = true;
+                        server->drag.restore_tiled = true;
+                        server_arrange(server);
+                    }
+                } else if (server->drag.resize) {
+                    if (view->tiled && view->output) {
+                        server->drag.tiled_resize = true;
+                    }
                 }
+
+                wlr_seat_pointer_clear_focus(server->seat);
+                return;
             }
-
-            return;
         }
     }
 
@@ -688,10 +838,9 @@ static void handle_cursor_button(struct wl_listener *listener, void *data) {
                 } else {
                     int abs_x = view->x;
                     int abs_y = view->y;
-
                     view->output = target;
                     view_set_geometry(view, abs_x - target->x, abs_y - target->y,
-                                      view->width, view->height);
+                        view->width, view->height);
                 }
             }
 
@@ -706,14 +855,21 @@ static void handle_cursor_button(struct wl_listener *listener, void *data) {
                     int rel_y = (int)server->cursor->y - out->y;
 
                     View *under = dwindle_view_at(&out->layout, rel_x, rel_y);
-                    if (under && under != view) {
-                        dwindle_focus(&out->layout, under);
-                    }
 
-                    dwindle_add_view(&out->layout, view);
-                    view->tiled = true;
+                    if (under && under != view && under->tiled && !under->fullscreen) {
+                        dwindle_place_view(&out->layout, view, under, rel_x, rel_y);
+                        view->tiled = true;
+                    } else {
+                        dwindle_add_view(&out->layout, view);
+                        view->tiled = true;
+                    }
                 }
             }
+        }
+
+        if (view) {
+            server_focus_view(server, view);
+            server_arrange(server);
         }
 
         server->drag.active = false;
@@ -724,33 +880,32 @@ static void handle_cursor_button(struct wl_listener *listener, void *data) {
         server->drag.view = NULL;
         server->drag.output = NULL;
 
-        if (view) {
-            server_focus_view(server, view);
-            server_arrange(server);
-        }
-
         process_cursor(server, event->time_msec);
         return;
     }
 
     if (event->state == WL_POINTER_BUTTON_STATE_PRESSED) {
-    double sx = 0.0;
-    double sy = 0.0;
-    struct wlr_surface *surface = surface_at_cursor(server, &sx, &sy);
-    if (surface && !view_from_surface(server, surface) &&
-        surface_allows_keyboard(server, surface)) {
-    server_focus_surface(server, surface);
-    }
-    }
-    process_cursor(server, event->time_msec);
-    wlr_seat_pointer_notify_button(
-    server->seat,
-    event->time_msec,
-    event->button,
-    event->state
-    );
-}
+        double sx = 0.0;
+        double sy = 0.0;
+        struct wlr_surface *surface = surface_at_cursor(server, &sx, &sy);
 
+        if (surface && !view_from_surface(server, surface) &&
+            surface_allows_keyboard(server, surface)) {
+            server_focus_surface(server, surface);
+        }
+    }
+
+    process_cursor(server, event->time_msec);
+
+    wlr_seat_pointer_notify_button(
+        server->seat,
+        event->time_msec,
+        event->button,
+        event->state
+    );
+
+    wlr_seat_pointer_notify_frame(server->seat);
+}
 
 
 static int vt_from_keycode(uint32_t keycode) {
@@ -928,6 +1083,14 @@ static void handle_cursor_axis(struct wl_listener *listener, void *data) {
     if (server->shutting_down) return;
     if (server->drag.active) return;
 
+    if (server->drag_icon_tree) {
+        wlr_scene_node_set_position(
+            &server->drag_icon_tree->node,
+            (int)server->cursor->x,
+            (int)server->cursor->y
+        );
+    }
+
     process_cursor(server, event->time_msec);
 
     wlr_seat_pointer_notify_axis(
@@ -939,6 +1102,7 @@ static void handle_cursor_axis(struct wl_listener *listener, void *data) {
         event->source,
         event->relative_direction
     );
+
     wlr_seat_pointer_notify_frame(server->seat);
 }
 
@@ -969,6 +1133,12 @@ void input_init(Server *server) {
     server->new_input.notify = handle_new_input;
     wl_signal_add(&server->backend->events.new_input, &server->new_input);
 
+   	server->request_start_drag.notify = handle_request_start_drag;
+	wl_signal_add(&server->seat->events.request_start_drag, &server->request_start_drag);
+
+	server->start_drag.notify = handle_start_drag;
+	wl_signal_add(&server->seat->events.start_drag, &server->start_drag);
+
     wlr_seat_set_capabilities(
         server->seat,
         WL_SEAT_CAPABILITY_KEYBOARD | WL_SEAT_CAPABILITY_POINTER
@@ -996,6 +1166,8 @@ void input_destroy(Server *server) {
 
     wl_list_init(&server->keyboards);
     server->active_keyboard = NULL;
+   	wl_list_remove(&server->request_start_drag.link);
+	wl_list_remove(&server->start_drag.link);
     wlr_seat_set_keyboard(server->seat, NULL);
 
     if (server->cursor) {

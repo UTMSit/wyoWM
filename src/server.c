@@ -7,6 +7,24 @@
 #include <signal.h>
 #include "layer.h"
 #include <dlfcn.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <sys/signalfd.h>
+#include <wlr/types/wlr_xdg_decoration_v1.h>
+#include <wlr/types/wlr_viewporter.h>
+#include <wlr/types/wlr_xdg_activation_v1.h>
+#include <wlr/types/wlr_relative_pointer_v1.h>
+#include <wlr/types/wlr_pointer_gestures_v1.h>
+#include <wlr/types/wlr_screencopy_v1.h>
+#include <wlr/types/wlr_presentation_time.h>
+
+#ifndef SFD_NONBLOCK
+#define SFD_NONBLOCK O_NONBLOCK
+#endif
+
+#ifndef SFD_CLOEXEC
+#define SFD_CLOEXEC O_CLOEXEC
+#endif
 
 static inline void listener_remove(struct wl_listener *listener) {
     if (!wl_list_empty(&listener->link)) {
@@ -15,9 +33,8 @@ static inline void listener_remove(struct wl_listener *listener) {
     }
 }
 
-static int handle_config_reload(int signo, void *data) {
-    Server *server = data;
-    (void)signo;
+static void reload_config(Server *server) {
+    if (!server || server->shutting_down) return;
 
     Config new_config;
     config_init_defaults(&new_config);
@@ -31,9 +48,15 @@ static int handle_config_reload(int signo, void *data) {
         config_load_default_keybinds(&new_config);
     }
 
-    Config old_config = server->config;
+    config_destroy(&server->config);
+
     server->config = new_config;
-    config_destroy(&old_config);
+
+    wl_list_init(&server->config.keybinds);
+    wl_list_init(&server->config.exec_once);
+
+    wl_list_insert_list(&server->config.keybinds, &new_config.keybinds);
+    wl_list_insert_list(&server->config.exec_once, &new_config.exec_once);
 
     Output *output;
     wl_list_for_each(output, &server->outputs, link) {
@@ -66,11 +89,95 @@ static int handle_config_reload(int signo, void *data) {
     View *view;
     wl_list_for_each(view, &server->views, link) {
         view_refresh_decorations(view);
+
+        if (view->mapped) {
+            double opacity = (server->focused_view == view)
+                ? server->config.active_opacity
+                : server->config.inactive_opacity;
+
+            int duration = server->config.animation_duration_ms;
+            if (duration < 0) duration = 0;
+
+            if (duration > 0) {
+                animation_set_target(&view->opacity, opacity, duration, EASING_EASE_OUT);
+                if (view->output) {
+                    wlr_output_schedule_frame(view->output->wlr_output);
+                }
+            } else {
+                view_set_opacity(view, opacity);
+            }
+        }
     }
 
     server_arrange(server);
+}
+
+static int handle_reload_fd(int fd, uint32_t mask, void *data) {
+    Server *server = data;
+
+    if (mask & WL_EVENT_READABLE) {
+        struct signalfd_siginfo si;
+        bool got = false;
+
+        for (;;) {
+            ssize_t n = read(fd, &si, sizeof(si));
+            if (n != (ssize_t)sizeof(si)) {
+                break;
+            }
+            got = true;
+        }
+
+        if (got) {
+            reload_config(server);
+        }
+    }
 
     return 0;
+}
+
+static void handle_decoration_destroy(struct wl_listener *listener, void *data) {
+    View *view = wl_container_of(listener, view, decoration_destroy);
+    (void)data;
+    view->decoration = NULL;
+    view->decoration_mode_set = false;
+    listener_remove(&view->decoration_destroy);
+}
+
+static void handle_request_set_selection(struct wl_listener *listener, void *data) {
+    Server *server = wl_container_of(listener, server, request_set_selection);
+    struct wlr_seat_request_set_selection_event *event = data;
+    wlr_seat_set_selection(server->seat, event->source, event->serial);
+}
+
+static void handle_new_xdg_decoration(struct wl_listener *listener, void *data) {
+    (void)listener;
+    struct wlr_xdg_toplevel_decoration_v1 *decoration = data;
+
+    if (!decoration->toplevel || !decoration->toplevel->base) {
+        return;
+    }
+
+    struct wlr_xdg_surface *xdg_surface = decoration->toplevel->base;
+    View *view = xdg_surface->data;
+
+    if (!view) {
+        if (xdg_surface->initialized) {
+            wlr_xdg_toplevel_decoration_v1_set_mode(decoration, WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
+        }
+        return;
+    }
+
+    listener_remove(&view->decoration_destroy);
+
+    view->decoration = decoration;
+    view->decoration_mode_set = false;
+    view->decoration_destroy.notify = handle_decoration_destroy;
+    wl_signal_add(&decoration->events.destroy, &view->decoration_destroy);
+
+    if (xdg_surface->initialized) {
+        wlr_xdg_toplevel_decoration_v1_set_mode(decoration, WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
+        view->decoration_mode_set = true;
+    }
 }
 
 static void handle_new_output(struct wl_listener *listener, void *data) {
@@ -190,7 +297,12 @@ view = NULL;
 if (view && view->output) {
 server->active_output = view->output;
 }
-if (server->focused_view == view && !server->focused_surface) return;
+if (server->focused_view == view && !server->focused_surface) {
+    if (view && view->output) {
+        dwindle_focus(&view->output->layout, view);
+    }
+    return;
+}
 listener_remove(&server->focused_surface_destroy);
 server->focused_surface = NULL;
 if (server->focused_view) {
@@ -326,7 +438,7 @@ void server_arrange(Server *server) {
         wallpaper_configure_output(output);
     }
 
-    layer_shell_arrange(server);
+    (void)layer_shell_arrange(server);
 
     wl_list_for_each(output, &server->outputs, link) {
         dwindle_set_gaps(&output->layout, server->config.gaps_in, server->config.gaps_out);
@@ -344,6 +456,7 @@ void server_arrange(Server *server) {
 bool server_init(Server *server) {
     memset(server, 0, sizeof(Server));
     server->shutting_down = false;
+    server->reload_fd = -1;
 
     server->display = wl_display_create();
     if (!server->display) return false;
@@ -370,20 +483,17 @@ bool server_init(Server *server) {
     server->data_device_manager = wlr_data_device_manager_create(server->display);
     if (!server->data_device_manager) return false;
 
-    typedef void *(*wyo_global_create_fn)(struct wl_display *display);
-    const char *critical_globals[] = {
-        "wlr_viewporter_create",
-        "wlr_xdg_activation_v1_create",
-        "wlr_relative_pointer_manager_v1_create",
-        "wlr_pointer_gestures_v1_create",
-        "wlr_screencopy_manager_v1_create",
-        NULL
-    };
+   	server->xdg_decoration_manager = wlr_xdg_decoration_manager_v1_create(server->display);
+	if (server->xdg_decoration_manager) {
+		server->new_xdg_decoration.notify = handle_new_xdg_decoration;
+		wl_signal_add(&server->xdg_decoration_manager->events.new_toplevel_decoration, &server->new_xdg_decoration);
+	}
 
-    for (int i = 0; critical_globals[i]; i++) {
-        wyo_global_create_fn fn = (wyo_global_create_fn)dlsym(RTLD_DEFAULT, critical_globals[i]);
-        if (fn) fn(server->display);
-    }
+	wlr_viewporter_create(server->display);
+    wlr_xdg_activation_v1_create(server->display);
+    wlr_relative_pointer_manager_v1_create(server->display);
+    wlr_pointer_gestures_v1_create(server->display);
+    wlr_screencopy_manager_v1_create(server->display);
 
     typedef void *(*wyo_versioned_global_fn)(struct wl_display *display, uint32_t version);
 
@@ -413,6 +523,8 @@ bool server_init(Server *server) {
 
     server->scene_layout = wlr_scene_attach_output_layout(server->scene, server->output_layout);
     if (!server->scene_layout) return false;
+
+    (void)wlr_presentation_create(server->display, server->backend, 1);
 
     typedef void *(*wyo_xdg_output_fn)(struct wl_display *display, struct wlr_output_layout *layout);
     wyo_xdg_output_fn create_xdg_output = (wyo_xdg_output_fn)dlsym(RTLD_DEFAULT, "wlr_xdg_output_manager_create");
@@ -466,21 +578,8 @@ bool server_init(Server *server) {
     wl_list_init(&server->keyboards);
     wl_list_init(&server->focused_surface_destroy.link);
 
-    typedef void *(*wyo_global_create_fn)(struct wl_display *display);
-
-    wyo_global_create_fn create_viewporter =
-        (wyo_global_create_fn)dlsym(RTLD_DEFAULT, "wlr_viewporter_create");
-
-    if (create_viewporter) {
-        create_viewporter(server->display);
-    }
-
-    wyo_global_create_fn create_xdg_activation =
-        (wyo_global_create_fn)dlsym(RTLD_DEFAULT, "wlr_xdg_activation_v1_create");
-
-    if (create_xdg_activation) {
-        create_xdg_activation(server->display);
-    }
+    server->request_set_selection.notify = handle_request_set_selection;
+    wl_signal_add(&server->seat->events.request_set_selection, &server->request_set_selection);
 
     input_init(server);
     layer_shell_init(server);
@@ -491,12 +590,51 @@ bool server_init(Server *server) {
     server->new_toplevel.notify = handle_new_toplevel;
     wl_signal_add(&server->xdg_shell->events.new_toplevel, &server->new_toplevel);
 
-    server->config_signal = wl_event_loop_add_signal(server->loop, SIGUSR1, handle_config_reload, server);
+    sigset_t reload_mask;
+    (void)sigemptyset(&reload_mask);
+    (void)sigaddset(&reload_mask, SIGUSR1);
+    (void)sigprocmask(SIG_BLOCK, &reload_mask, NULL);
+
+    server->reload_fd = signalfd(-1, &reload_mask, SFD_NONBLOCK | SFD_CLOEXEC);
+    if (server->reload_fd < 0) return false;
+
+    server->reload_source = wl_event_loop_add_fd(
+        server->loop,
+        server->reload_fd,
+        WL_EVENT_READABLE,
+        handle_reload_fd,
+        server
+    );
+
+    if (!server->reload_source) {
+        close(server->reload_fd);
+        server->reload_fd = -1;
+        return false;
+    }
 
     arena_init(&server->arena, 1024 * 1024 * 16);
-    ipc_init(&server->ipc, "/tmp/wyowm.sock");
+
+    char ipc_path[1024];
+    const char *runtime_dir = getenv("XDG_RUNTIME_DIR");
+    if (runtime_dir && *runtime_dir) {
+        snprintf(ipc_path, sizeof(ipc_path), "%s/wyowm.sock", runtime_dir);
+    } else {
+        snprintf(ipc_path, sizeof(ipc_path), "/tmp/wyowm.sock");
+    }
+
+    ipc_init(&server->ipc, ipc_path);
 
     return true;
+}
+
+static void spawn_exec_once(void *data) {
+    Server *server = data;
+    ConfigExecOnce *exec;
+    wl_list_for_each(exec, &server->config.exec_once, link) {
+        if (exec->command) {
+            input_spawn_command(exec->command);
+        }
+    }
 }
 
 void server_run(Server *server) {
@@ -510,7 +648,7 @@ void server_run(Server *server) {
     }
 
     setenv("WAYLAND_DISPLAY", socket, 1);
-
+    wl_event_loop_add_idle(server->loop, spawn_exec_once, server);
     wl_display_run(server->display);
 }
 
@@ -534,13 +672,22 @@ server->focused_view = NULL;
 
     listener_remove(&server->new_output);
     listener_remove(&server->new_toplevel);
-
+    listener_remove(&server->request_set_selection);
     input_destroy(server);
 
-    if (server->config_signal) {
-        wl_event_source_remove(server->config_signal);
-        server->config_signal = NULL;
+    if (server->reload_source) {
+        wl_event_source_remove(server->reload_source);
+        server->reload_source = NULL;
     }
+
+    if (server->reload_fd >= 0) {
+        close(server->reload_fd);
+        server->reload_fd = -1;
+    }
+
+   	if (!wl_list_empty(&server->new_xdg_decoration.link)) {
+		wl_list_remove(&server->new_xdg_decoration.link);
+	}
 
     config_destroy(&server->config);
 

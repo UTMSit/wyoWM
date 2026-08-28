@@ -40,21 +40,27 @@ typedef enum {
     WALLPAPER_MODE_TILE
 } WallpaperMode;
 
+typedef struct ConfigExecOnce {
+	char *command;
+	struct wl_list link;
+} ConfigExecOnce;
+
 typedef struct Config {
-    int border_width;
-    float border_color_focused[4];
-    float border_color_unfocused[4];
-    float background_color[4];
-    int gaps_in;
-    int gaps_out;
-    double corner_radius;
-    double active_opacity;
-    double inactive_opacity;
-    int animation_duration_ms;
-    char wallpaper_path[1024];
-    WallpaperMode wallpaper_mode;
-    struct wl_list keybinds;
-    bool has_keybinds;
+	int border_width;
+	float border_color_focused[4];
+	float border_color_unfocused[4];
+	float background_color[4];
+	int gaps_in;
+	int gaps_out;
+	double corner_radius;
+	double active_opacity;
+	double inactive_opacity;
+	int animation_duration_ms;
+	char wallpaper_path[1024];
+	WallpaperMode wallpaper_mode;
+	struct wl_list keybinds;
+	struct wl_list exec_once;
+	bool has_keybinds;
 } Config;
 
 void config_init_defaults(Config *config);

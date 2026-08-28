@@ -42,6 +42,9 @@ static const KeyNameEntry key_name_table[] = {
     { "F10", KEY_F10 },
     { "F11", KEY_F11 },
     { "F12", KEY_F12 },
+    { "PRINT", KEY_SYSRQ },
+    { "PRINTSCREEN", KEY_SYSRQ },
+    { "SYSRQ", KEY_SYSRQ },
 };
 
 static uint32_t keycode_from_name(const char *name) {
@@ -52,20 +55,7 @@ static uint32_t keycode_from_name(const char *name) {
     size_t len = strlen(name);
 
     if (len == 1) {
-        unsigned char c = (unsigned char)name[0];
-
-        if (isalpha(c)) {
-            c = (unsigned char)toupper(c);
-            return KEY_A + (uint32_t)(c - 'A');
-        }
-
-        if (isdigit(c)) {
-            if (c == '0') {
-                return KEY_0;
-            }
-
-            return KEY_1 + (uint32_t)(c - '1');
-        }
+        return 0;
     }
 
     for (size_t i = 0; i < sizeof(key_name_table) / sizeof(key_name_table[0]); i++) {
@@ -192,159 +182,6 @@ static void set_wallpaper_path(Config *config, const char *value) {
     }
 }
 
-static void parse_bind_line(Config *config, const char *line) {
-    char *copy = strdup(line);
-    if (!copy) {
-        return;
-    }
-
-    char *eq = strchr(copy, '=');
-    if (!eq) {
-        free(copy);
-        return;
-    }
-
-    *eq = '\0';
-
-    char *left = trim(copy);
-    char *right = trim(eq + 1);
-
-    if (!*left || !*right) {
-        free(copy);
-        return;
-    }
-
-    if (strncasecmp(left, "bind.", 5) != 0) {
-        free(copy);
-        return;
-    }
-
-    char *left_copy = strdup(left);
-    if (!left_copy) {
-        free(copy);
-        return;
-    }
-
-    char *tokens[32];
-    int token_count = 0;
-    char *save = NULL;
-    char *tok = strtok_r(left_copy, ".", &save);
-
-    while (tok && token_count < 32) {
-        tokens[token_count++] = tok;
-        tok = strtok_r(NULL, ".", &save);
-    }
-
-    if (token_count < 2) {
-        free(left_copy);
-        free(copy);
-        return;
-    }
-
-    uint32_t modifiers = 0;
-    bool bad = false;
-
-    for (int i = 1; i < token_count - 1; i++) {
-        if (!strcasecmp(tokens[i], "SUPER") || !strcasecmp(tokens[i], "LOGO")) {
-            modifiers |= WLR_MODIFIER_LOGO;
-        } else if (!strcasecmp(tokens[i], "SHIFT")) {
-            modifiers |= WLR_MODIFIER_SHIFT;
-        } else if (!strcasecmp(tokens[i], "CTRL") || !strcasecmp(tokens[i], "CONTROL")) {
-            modifiers |= WLR_MODIFIER_CTRL;
-        } else if (!strcasecmp(tokens[i], "ALT")) {
-            modifiers |= WLR_MODIFIER_ALT;
-        } else {
-            bad = true;
-            break;
-        }
-    }
-
-    uint32_t keycode = 0;
-    xkb_keysym_t keysym = XKB_KEY_NoSymbol;
-
-    if (!bad) {
-        const char *key_name = tokens[token_count - 1];
-
-        keycode = keycode_from_name(key_name);
-
-        keysym = xkb_keysym_from_name(key_name, XKB_KEYSYM_CASE_INSENSITIVE);
-        if (keysym != XKB_KEY_NoSymbol) {
-            keysym = xkb_keysym_to_lower(keysym);
-        }
-
-        if (keycode == 0 && keysym == XKB_KEY_NoSymbol) {
-            bad = true;
-        }
-    }
-
-    if (bad) {
-        free(left_copy);
-        free(copy);
-        return;
-    }
-
-    char *right_copy = strdup(right);
-    if (!right_copy) {
-        free(left_copy);
-        free(copy);
-        return;
-    }
-
-    ConfigAction action = ACTION_NONE;
-    const char *command = NULL;
-    int arg = 0;
-
-    if (!strncasecmp(right_copy, "exec", 4)) {
-        char *cmd = trim(right_copy + 4);
-        if (*cmd) {
-            action = ACTION_EXEC;
-            command = cmd;
-        }
-    } else if (!strcasecmp(right_copy, "close")) {
-        action = ACTION_CLOSE;
-    } else if (!strcasecmp(right_copy, "quit")) {
-        action = ACTION_QUIT;
-    } else if (!strcasecmp(right_copy, "togglefloating")) {
-        action = ACTION_TOGGLE_FLOATING;
-    } else if (!strcasecmp(right_copy, "fullscreen")) {
-        action = ACTION_TOGGLE_FULLSCREEN;
-    } else if (!strcasecmp(right_copy, "center")) {
-        action = ACTION_CENTER;
-    } else if (!strncasecmp(right_copy, "moveoutput", 10)) {
-        char *dir = trim(right_copy + 10);
-        if (parse_direction(dir, &arg)) {
-            action = ACTION_MOVE_OUTPUT_DIRECTION;
-        }
-    } else if (!strncasecmp(right_copy, "move", 4)) {
-        char *dir = trim(right_copy + 4);
-        if (parse_direction(dir, &arg)) {
-            action = ACTION_MOVE_DIRECTION;
-        }
-    } else if (!strncasecmp(right_copy, "focus", 5)) {
-        char *dir = trim(right_copy + 5);
-        if (parse_direction(dir, &arg)) {
-            action = ACTION_FOCUS_DIRECTION;
-        }
-    } else if (!strncasecmp(right_copy, "resize", 6)) {
-        char *dir = trim(right_copy + 6);
-        if (parse_direction(dir, &arg)) {
-            action = ACTION_RESIZE_DIRECTION;
-        }
-    } else if (!strncasecmp(right_copy, "vt", 2)) {
-        char *num = trim(right_copy + 2);
-        action = ACTION_SWITCH_VT;
-        arg = atoi(num);
-    }
-
-    if (action != ACTION_NONE) {
-        add_bind(config, modifiers, keycode, keysym, action, command, arg);
-    }
-
-    free(right_copy);
-    free(left_copy);
-    free(copy);
-}
-
 static double clamp_opacity(double v) {
     if (v < 0.0) return 0.0;
     if (v > 1.0) return 1.0;
@@ -391,10 +228,127 @@ static void parse_general_line(Config *config, const char *key, const char *valu
     }
 }
 
-void config_init_defaults(Config *config) {
-    memset(config, 0, sizeof(Config));
+static void parse_config_line(Config *config, const char *line) {
+	char *copy = strdup(line);
+	if (!copy) return;
 
-    wl_list_init(&config->keybinds);
+	char *eq = strchr(copy, '=');
+	if (!eq) {
+		free(copy);
+		return;
+	}
+
+	*eq = '\0';
+	char *left = trim(copy);
+	char *right = trim(eq + 1);
+
+	if (!*left || !*right) {
+		free(copy);
+		return;
+	}
+
+	if (!strncasecmp(left, "bind.", 5)) {
+		char *keys = left + 5;
+		char *keys_copy = strdup(keys);
+		if (!keys_copy) {
+			free(copy);
+			return;
+		}
+
+		uint32_t modifiers = 0;
+		char *saveptr = NULL;
+		char *token = strtok_r(keys_copy, ".", &saveptr);
+		char *key_name = NULL;
+
+		while (token) {
+			char *t = trim(token);
+			if (!*t) {
+				token = strtok_r(NULL, ".", &saveptr);
+				continue;
+			}
+			if (!strcasecmp(t, "SUPER") || !strcasecmp(t, "LOGO") || !strcasecmp(t, "MOD4")) {
+				modifiers |= WLR_MODIFIER_LOGO;
+			} else if (!strcasecmp(t, "SHIFT")) {
+				modifiers |= WLR_MODIFIER_SHIFT;
+			} else if (!strcasecmp(t, "CTRL") || !strcasecmp(t, "CONTROL")) {
+				modifiers |= WLR_MODIFIER_CTRL;
+			} else if (!strcasecmp(t, "ALT")) {
+				modifiers |= WLR_MODIFIER_ALT;
+			} else {
+				key_name = t;
+			}
+			token = strtok_r(NULL, ".", &saveptr);
+		}
+
+		if (key_name) {
+			uint32_t keycode = keycode_from_name(key_name);
+			xkb_keysym_t keysym = xkb_keysym_from_name(key_name, XKB_KEYSYM_CASE_INSENSITIVE);
+			if (keysym != XKB_KEY_NoSymbol) {
+				keysym = xkb_keysym_to_lower(keysym);
+			}
+			if (keycode != 0 || keysym != XKB_KEY_NoSymbol) {
+				ConfigAction action = ACTION_NONE;
+				const char *command = NULL;
+				int arg = 0;
+
+				if (!strncasecmp(right, "exec", 4)) {
+					char *cmd = trim(right + 4);
+					if (*cmd) {
+						action = ACTION_EXEC;
+						command = cmd;
+					}
+				} else if (!strcasecmp(right, "close")) {
+					action = ACTION_CLOSE;
+				} else if (!strcasecmp(right, "quit")) {
+					action = ACTION_QUIT;
+				} else if (!strcasecmp(right, "togglefloating")) {
+					action = ACTION_TOGGLE_FLOATING;
+				} else if (!strcasecmp(right, "fullscreen")) {
+					action = ACTION_TOGGLE_FULLSCREEN;
+				} else if (!strcasecmp(right, "center")) {
+					action = ACTION_CENTER;
+				} else if (!strncasecmp(right, "moveoutput", 10)) {
+					char *dir = trim(right + 10);
+					if (parse_direction(dir, &arg)) action = ACTION_MOVE_OUTPUT_DIRECTION;
+				} else if (!strncasecmp(right, "move", 4)) {
+					char *dir = trim(right + 4);
+					if (parse_direction(dir, &arg)) action = ACTION_MOVE_DIRECTION;
+				} else if (!strncasecmp(right, "focus", 5)) {
+					char *dir = trim(right + 5);
+					if (parse_direction(dir, &arg)) action = ACTION_FOCUS_DIRECTION;
+				} else if (!strncasecmp(right, "resize", 6)) {
+					char *dir = trim(right + 6);
+					if (parse_direction(dir, &arg)) action = ACTION_RESIZE_DIRECTION;
+				} else if (!strncasecmp(right, "vt", 2)) {
+					char *num = trim(right + 2);
+					action = ACTION_SWITCH_VT;
+					arg = atoi(num);
+				}
+
+				if (action != ACTION_NONE) {
+					add_bind(config, modifiers, keycode, keysym, action, command, arg);
+				}
+			}
+		}
+		free(keys_copy);
+	} else if (!strncasecmp(left, "general.", 8)) {
+		char *key = left + 8;
+		parse_general_line(config, key, right);
+	} else if (!strcasecmp(left, "exec-once") || !strcasecmp(left, "exec_once")) {
+		ConfigExecOnce *exec = calloc(1, sizeof(ConfigExecOnce));
+		if (exec) {
+			exec->command = strdup(right);
+			wl_list_insert(&config->exec_once, &exec->link);
+		}
+	}
+
+	free(copy);
+}
+
+void config_init_defaults(Config *config) {
+	memset(config, 0, sizeof(Config));
+	wl_list_init(&config->keybinds);
+	wl_list_init(&config->exec_once);
 
     config->border_width = 2;
     config->gaps_in = 4;
@@ -423,63 +377,23 @@ void config_init_defaults(Config *config) {
 }
 
 bool config_load_file(Config *config, const char *path) {
-    FILE *fp = fopen(path, "r");
-    if (!fp) {
-        return false;
-    }
+	FILE *fp = fopen(path, "r");
+	if (!fp) {
+		return false;
+	}
 
-    char current_section[64] = {0};
-    char *line = NULL;
-    size_t line_capacity = 0;
-
-    while (getline(&line, &line_capacity, fp) >= 0) {
-        char *s = trim(line);
-
-        if (!*s || *s == '#') {
-            continue;
-        }
-
-        char *open = strchr(s, '{');
-        if (open) {
-            *open = '\0';
-            char *section = trim(s);
-            snprintf(current_section, sizeof(current_section), "%s", section);
-            continue;
-        }
-
-        if (!strcmp(s, "}")) {
-            current_section[0] = '\0';
-            continue;
-        }
-
-        if (strncasecmp(s, "bind.", 5) == 0) {
-            parse_bind_line(config, s);
-            continue;
-        }
-
-        if (!strcasecmp(current_section, "binds")) {
-            parse_bind_line(config, s);
-            continue;
-        }
-
-        char *eq = strchr(s, '=');
-        if (!eq) {
-            continue;
-        }
-
-        *eq = '\0';
-        char *key = trim(s);
-        char *value = trim(eq + 1);
-
-        if (!strcasecmp(current_section, "general")) {
-            parse_general_line(config, key, value);
-        }
-    }
-
-    free(line);
-    fclose(fp);
-
-    return true;
+	char *line = NULL;
+	size_t line_capacity = 0;
+	while (getline(&line, &line_capacity, fp) >= 0) {
+		char *s = trim(line);
+		if (!*s || *s == '#') {
+			continue;
+		}
+		parse_config_line(config, s);
+	}
+	free(line);
+	fclose(fp);
+	return true;
 }
 
 void config_load_default_keybinds(Config *config) {
@@ -545,7 +459,14 @@ void config_free_keybinds(Config *config) {
 }
 
 void config_destroy(Config *config) {
-    config_free_keybinds(config);
+	config_free_keybinds(config);
+	ConfigExecOnce *exec, *tmp_exec;
+	wl_list_for_each_safe(exec, tmp_exec, &config->exec_once, link) {
+		wl_list_remove(&exec->link);
+		free(exec->command);
+		free(exec);
+	}
+	wl_list_init(&config->exec_once);
 }
 
 bool config_default_path(char *out, size_t out_size) {

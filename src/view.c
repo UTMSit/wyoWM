@@ -163,16 +163,14 @@ static void view_apply_geometry(View *view) {
 }
 
 static void view_update_xdg_tiled_state(View *view) {
-    if (!view || view->type != VIEW_TYPE_XDG || !view->xdg.toplevel) return;
-    if (!view->mapped) return;
-
-    enum wlr_edges edges = WLR_EDGE_NONE;
-
-    if (view->tiled && !view->fullscreen) {
-        edges = WLR_EDGE_TOP | WLR_EDGE_BOTTOM | WLR_EDGE_LEFT | WLR_EDGE_RIGHT;
-    }
-
-    wlr_xdg_toplevel_set_tiled(view->xdg.toplevel, edges);
+	if (!view || view->type != VIEW_TYPE_XDG || !view->xdg.toplevel) return;
+	if (!view->mapped) return;
+	if (!view->xdg.xdg_surface || !view->xdg.xdg_surface->initialized) return;
+	enum wlr_edges edges = WLR_EDGE_NONE;
+	if (view->tiled && !view->fullscreen) {
+		edges = WLR_EDGE_TOP | WLR_EDGE_BOTTOM | WLR_EDGE_LEFT | WLR_EDGE_RIGHT;
+	}
+	wlr_xdg_toplevel_set_tiled(view->xdg.toplevel, edges);
 }
 
 static void view_update_border(View *view, bool focused) {
@@ -310,10 +308,9 @@ View *view_create_xdg(Server *server, struct wlr_xdg_surface *xdg_surface, struc
     animation_init(&view->anim_y, 0.0);
 
     xdg_surface->data = view;
-
     wl_list_init(&view->link);
     wl_list_init(&view->scene_node_destroy.link);
-
+    wl_list_init(&view->decoration_destroy.link);
     wl_list_init(&view->xdg.map.link);
     wl_list_init(&view->xdg.unmap.link);
     wl_list_init(&view->xdg.destroy.link);
@@ -395,6 +392,10 @@ void view_destroy(View *view) {
         listener_remove(&view->scene_node_destroy);
     }
 
+    listener_remove(&view->decoration_destroy);
+    view->decoration = NULL;
+    view->decoration_mode_set = false;
+
     if (view->root_tree) {
         wlr_scene_node_destroy(&view->root_tree->node);
         view->root_tree = NULL;
@@ -449,6 +450,10 @@ void view_cleanup_for_shutdown(View *view) {
     } else {
         listener_remove(&view->scene_node_destroy);
     }
+
+    listener_remove(&view->decoration_destroy);
+    view->decoration = NULL;
+    view->decoration_mode_set = false;
 
     if (view->root_tree) {
         wlr_scene_node_destroy(&view->root_tree->node);
@@ -556,73 +561,58 @@ void view_set_opacity(View *view, double opacity) {
 }
 
 void view_focus(View *view) {
-    if (!view) return;
-
-    if (view->root_tree) {
-        wlr_scene_node_raise_to_top(&view->root_tree->node);
-    } else if (view->scene_tree) {
-        wlr_scene_node_raise_to_top(&view->scene_tree->node);
-    }
-
-    if (view->type == VIEW_TYPE_XDG && view->xdg.toplevel) {
-        wlr_xdg_toplevel_set_activated(view->xdg.toplevel, true);
-    }
-
-    double opacity = 1.0;
-    int duration = 0;
-
-    if (view->server) {
-        opacity = view->server->config.active_opacity;
-        duration = view->server->config.animation_duration_ms;
-    }
-
-    if (opacity < 0.0) opacity = 0.0;
-    if (opacity > 1.0) opacity = 1.0;
-    if (duration < 0) duration = 0;
-
-    if (duration > 0) {
-        animation_set_target(&view->opacity, opacity, duration, EASING_EASE_OUT);
-
-        if (view->output) {
-            wlr_output_schedule_frame(view->output->wlr_output);
-        }
-    } else {
-        view_set_opacity(view, opacity);
-    }
-
-    view_update_border(view, true);
+	if (!view) return;
+	if (view->root_tree) {
+		wlr_scene_node_raise_to_top(&view->root_tree->node);
+	} else if (view->scene_tree) {
+		wlr_scene_node_raise_to_top(&view->scene_tree->node);
+	}
+	if (view->type == VIEW_TYPE_XDG && view->xdg.toplevel && view->xdg.xdg_surface && view->xdg.xdg_surface->initialized) {
+		wlr_xdg_toplevel_set_activated(view->xdg.toplevel, true);
+	}
+	double opacity = 1.0;
+	int duration = 0;
+	if (view->server) {
+		opacity = view->server->config.active_opacity;
+		duration = view->server->config.animation_duration_ms;
+	}
+	if (opacity < 0.0) opacity = 0.0;
+	if (opacity > 1.0) opacity = 1.0;
+	if (duration < 0) duration = 0;
+	if (duration > 0) {
+		animation_set_target(&view->opacity, opacity, duration, EASING_EASE_OUT);
+		if (view->output) {
+			wlr_output_schedule_frame(view->output->wlr_output);
+		}
+	} else {
+		view_set_opacity(view, opacity);
+	}
+	view_update_border(view, true);
 }
 
 void view_unfocus(View *view) {
-    if (!view) return;
-
-    if (view->type == VIEW_TYPE_XDG && view->xdg.toplevel) {
-        wlr_xdg_toplevel_set_activated(view->xdg.toplevel, false);
-    }
-
-    double opacity = 1.0;
-    int duration = 0;
-
-    if (view->server) {
-        opacity = view->server->config.inactive_opacity;
-        duration = view->server->config.animation_duration_ms;
-    }
-
-    if (opacity < 0.0) opacity = 0.0;
-    if (opacity > 1.0) opacity = 1.0;
-    if (duration < 0) duration = 0;
-
-    if (duration > 0) {
-        animation_set_target(&view->opacity, opacity, duration, EASING_EASE_OUT);
-
-        if (view->output) {
-            wlr_output_schedule_frame(view->output->wlr_output);
-        }
-    } else {
-        view_set_opacity(view, opacity);
-    }
-
-    view_update_border(view, false);
+	if (!view) return;
+	if (view->type == VIEW_TYPE_XDG && view->xdg.toplevel && view->xdg.xdg_surface && view->xdg.xdg_surface->initialized) {
+		wlr_xdg_toplevel_set_activated(view->xdg.toplevel, false);
+	}
+	double opacity = 1.0;
+	int duration = 0;
+	if (view->server) {
+		opacity = view->server->config.inactive_opacity;
+		duration = view->server->config.animation_duration_ms;
+	}
+	if (opacity < 0.0) opacity = 0.0;
+	if (opacity > 1.0) opacity = 1.0;
+	if (duration < 0) duration = 0;
+	if (duration > 0) {
+		animation_set_target(&view->opacity, opacity, duration, EASING_EASE_OUT);
+		if (view->output) {
+			wlr_output_schedule_frame(view->output->wlr_output);
+		}
+	} else {
+		view_set_opacity(view, opacity);
+	}
+	view_update_border(view, false);
 }
 
 static void handle_toplevel_destroy(struct wl_listener *listener, void *data) {
@@ -681,7 +671,6 @@ static void handle_unmap(struct wl_listener *listener, void *data) {
 static void handle_commit(struct wl_listener *listener, void *data) {
     View *view = wl_container_of(listener, view, xdg.commit);
     (void)data;
-
     if (!view || !view->server || view->server->shutting_down) return;
 
     if (!view->mapped &&
@@ -691,6 +680,11 @@ static void handle_commit(struct wl_listener *listener, void *data) {
         view->width == 0 &&
         view->height == 0) {
         wlr_xdg_toplevel_set_size(view->xdg.toplevel, 800, 600);
+    }
+
+    if (view->decoration && !view->decoration_mode_set && view->xdg.xdg_surface && view->xdg.xdg_surface->initialized) {
+        wlr_xdg_toplevel_decoration_v1_set_mode(view->decoration, WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
+        view->decoration_mode_set = true;
     }
 
     if (view->mapped) {
@@ -714,12 +708,11 @@ void view_toggle_fullscreen(View *view) {
     Output *output = view->output;
     Server *server = view->server;
 
-    if (view->fullscreen) {
-        view->fullscreen = false;
-
-        if (view->type == VIEW_TYPE_XDG && view->xdg.toplevel) {
-            wlr_xdg_toplevel_set_fullscreen(view->xdg.toplevel, false);
-        }
+   	if (view->fullscreen) {
+		view->fullscreen = false;
+		if (view->type == VIEW_TYPE_XDG && view->xdg.toplevel && view->xdg.xdg_surface && view->xdg.xdg_surface->initialized) {
+			wlr_xdg_toplevel_set_fullscreen(view->xdg.toplevel, false);
+		}
 
         if (view->saved_tiled) {
             view->saved_tiled = false;
@@ -760,10 +753,9 @@ void view_toggle_fullscreen(View *view) {
     }
 
     view->fullscreen = true;
-
-    if (view->type == VIEW_TYPE_XDG && view->xdg.toplevel) {
-        wlr_xdg_toplevel_set_fullscreen(view->xdg.toplevel, true);
-    }
+	if (view->type == VIEW_TYPE_XDG && view->xdg.toplevel && view->xdg.xdg_surface && view->xdg.xdg_surface->initialized) {
+		wlr_xdg_toplevel_set_fullscreen(view->xdg.toplevel, true);
+	}
 
     view_set_geometry(view, 0, 0, output->width, output->height);
 

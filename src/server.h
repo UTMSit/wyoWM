@@ -39,6 +39,7 @@ struct View;
 struct wlr_surface;
 struct wlr_layer_shell_v1;
 struct wlr_buffer;
+struct wlr_drag;
 
 typedef struct DragState {
     bool active;
@@ -118,8 +119,23 @@ typedef struct Server {
     struct wlr_foreign_toplevel_manager_v1 *foreign_toplevel_manager;
     #endif
 
+    struct wlr_xdg_decoration_manager_v1 *xdg_decoration_manager;
+    struct wl_listener new_xdg_decoration;
+    struct wl_listener request_set_selection;
+
+	struct wl_listener request_start_drag;
+	struct wl_listener start_drag;
+	struct wl_listener drag_focus;
+	struct wl_listener drag_motion;
+	struct wl_listener drag_drop;
+	struct wl_listener drag_destroy;
+	struct wlr_scene_tree *drag_icon_tree;
+    bool dnd_active;
+    struct wlr_drag *dnd_drag;
+
     Config config;
-    struct wl_event_source *config_signal;
+    int reload_fd;
+    struct wl_event_source *reload_source;
 
     struct wlr_buffer *wallpaper_buffer;
     int wallpaper_width;

@@ -606,15 +606,69 @@ bool dwindle_move_view(DwindleLayout *layout, int dx, int dy) {
         return false;
     }
 
-    View *tmp = layout->focused->view;
-    layout->focused->view = best->view;
-    best->view = tmp;
+    View *moved = layout->focused->view;
+    View *other = best->view;
 
-    layout->focused = best;
+    layout->focused->view = other;
+    best->view = moved;
+
+    DwindleNode *moved_node = find_leaf(layout->root, moved);
+    layout->focused = moved_node ? moved_node : best;
 
     if (layout->width > 0 && layout->height > 0) {
         dwindle_arrange(layout, layout->width, layout->height);
     }
 
     return true;
+}
+
+void dwindle_swap_views(DwindleLayout *layout, View *a, View *b) {
+    if (!layout || !a || !b || a == b) return;
+
+    DwindleNode *leaf_a = find_leaf(layout->root, a);
+    DwindleNode *leaf_b = find_leaf(layout->root, b);
+
+    if (!leaf_a || !leaf_b) return;
+
+    leaf_a->view = b;
+    leaf_b->view = a;
+
+    if (layout->focused == leaf_a) {
+        layout->focused = leaf_b;
+    } else if (layout->focused == leaf_b) {
+        layout->focused = leaf_a;
+    }
+
+    if (layout->width > 0 && layout->height > 0) {
+        dwindle_arrange(layout, layout->width, layout->height);
+    }
+}
+
+void dwindle_place_view(DwindleLayout *layout, View *view, View *under, int rel_x, int rel_y) {
+    if (!layout || !view || !under) return;
+
+    dwindle_focus(layout, under);
+    dwindle_add_view(layout, view);
+
+    DwindleNode *leaf = find_leaf(layout->root, view);
+    if (!leaf || !leaf->parent) return;
+
+    DwindleNode *parent = leaf->parent;
+
+    bool need_swap = false;
+    if (parent->split == SPLIT_VERTICAL) {
+        need_swap = (rel_x < parent->x + parent->width / 2);
+    } else if (parent->split == SPLIT_HORIZONTAL) {
+        need_swap = (rel_y < parent->y + parent->height / 2);
+    }
+
+    if (!need_swap) return;
+
+    DwindleNode *under_leaf = find_leaf(layout->root, under);
+    if (!under_leaf || under_leaf->parent != parent) return;
+
+    if (parent->children[0] == under_leaf && parent->children[1] == leaf) {
+        parent->children[0] = leaf;
+        parent->children[1] = under_leaf;
+    }
 }

@@ -50,6 +50,7 @@ View *dwindle_first_view(DwindleLayout *layout);
 void dwindle_move_focus(DwindleLayout *layout, int dx, int dy);
 void dwindle_resize(DwindleLayout *layout, int dx, int dy);
 bool dwindle_move_view(DwindleLayout *layout, int dx, int dy);
+void dwindle_swap_views(DwindleLayout *layout, View *a, View *b);
 View *dwindle_view_at(DwindleLayout *layout, int x, int y);
-
+void dwindle_place_view(DwindleLayout *layout, View *view, View *under, int rel_x, int rel_y);
 #endif

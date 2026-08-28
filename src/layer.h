@@ -25,6 +25,6 @@ bool initial_configure_sent;
 
 void layer_shell_init(struct Server *server);
 void layer_shell_destroy(struct Server *server);
-void layer_shell_arrange(struct Server *server);
+bool layer_shell_arrange(struct Server *server);
 
 #endif

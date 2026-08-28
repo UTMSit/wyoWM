@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <wayland-server.h>
 #include <wlr/types/wlr_xdg_shell.h>
+#include <wlr/types/wlr_xdg_decoration_v1.h>
 #include <wlr/types/wlr_scene.h>
 #include "animation.h"
 
@@ -18,7 +19,6 @@ typedef struct View {
     struct Server *server;
     struct Output *output;
     ViewType type;
-
     struct wlr_scene_tree *root_tree;
     struct wlr_scene_tree *scene_tree;
     struct wlr_scene_rect *border[4];
@@ -67,6 +67,10 @@ typedef struct View {
             bool listeners_initialized;
         } xdg;
     };
+
+    struct wlr_xdg_toplevel_decoration_v1 *decoration;
+    bool decoration_mode_set;
+    struct wl_listener decoration_destroy;
 } View;
 
 View *view_create_xdg(struct Server *server, struct wlr_xdg_surface *xdg_surface, struct wlr_xdg_toplevel *toplevel);

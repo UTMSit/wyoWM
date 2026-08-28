@@ -216,13 +216,12 @@ void output_destroy(Output *output) {
 
             if (!view->mapped) continue;
 
-            if (view->floating) {
-                int rel_x = view->x - output->x;
-                int rel_y = view->y - output->y;
-
-                if (rel_x < 0 || rel_y < 0 ||
-                    rel_x >= fallback->width ||
-                    rel_y >= fallback->height) {
+          		if (view->floating) {
+			int rel_x = view->x - fallback->x;
+			int rel_y = view->y - fallback->y;
+			if (rel_x < 0 || rel_y < 0 ||
+				rel_x >= fallback->width ||
+				rel_y >= fallback->height) {
                     int width = view->width > 0 ? view->width : 800;
                     int height = view->height > 0 ? view->height : 600;
 

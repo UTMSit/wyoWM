@@ -6,6 +6,7 @@
 #include <string.h>
 #include <fcntl.h>
 #include <stdlib.h>
+#include <sys/stat.h>
 
 int ipc_init(IPCServer *server, const char *path) {
     server->socket_fd = -1;
@@ -25,6 +26,8 @@ int ipc_init(IPCServer *server, const char *path) {
         close(fd);
         return -1;
     }
+
+    chmod(path, 0700);
 
     if (listen(fd, 4) < 0) {
         close(fd);
