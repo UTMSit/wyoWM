@@ -9,6 +9,7 @@
 
 struct Server;
 struct wlr_buffer;
+struct Workspace;
 
 typedef struct Output {
     struct Server *server;
@@ -30,6 +31,7 @@ typedef struct Output {
     int usable_height;
 
     DwindleLayout layout;
+    struct Workspace *active_workspace;
     View *focused_view;
 
     struct wlr_scene_buffer *wallpaper;

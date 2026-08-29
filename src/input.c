@@ -7,6 +7,7 @@
 #include "layer.h"
 #include <wlr/types/wlr_layer_shell_v1.h>
 #include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <errno.h>
@@ -204,6 +205,15 @@ static void move_view_to_output_direction(Server *server, int dir) {
         return;
     }
 
+    if (view->workspace && target->active_workspace &&
+        view->workspace != target->active_workspace) {
+        workspace_remove_view(view->workspace, view);
+    }
+
+    if (target->active_workspace) {
+        view->workspace = target->active_workspace;
+    }
+
     if (view->fullscreen) {
         view->output = target;
         view_set_geometry(view, 0, 0, target->width, target->height);
@@ -222,13 +232,10 @@ static void move_view_to_output_direction(Server *server, int dir) {
     if (view->floating) {
         int width = view->width > 0 ? view->width : 800;
         int height = view->height > 0 ? view->height : 600;
-
         int x = (target->width - width) / 2;
         int y = (target->height - height) / 2;
-
         if (x < 0) x = 0;
         if (y < 0) y = 0;
-
         view_set_geometry(view, x, y, width, height);
     } else {
         dwindle_add_view(&target->layout, view);
@@ -326,6 +333,24 @@ static bool handle_keybind_action(Server *server, const ConfigKeybind *bind) {
         wl_display_terminate(server->display);
         return true;
 
+    case ACTION_WORKSPACE: {
+            Output *out = server->active_output;
+
+            if (!out && server->focused_view) {
+                out = server->focused_view->output;
+            }
+
+            if (!out && !wl_list_empty(&server->outputs)) {
+                out = wl_container_of(server->outputs.next, out, link);
+            }
+
+            if (out) {
+                server_switch_workspace(server, out, bind->arg);
+            }
+
+            return true;
+        }
+
     case ACTION_SWITCH_VT:
         if (server->session) {
             wlr_session_change_vt(server->session, (unsigned)bind->arg);
@@ -362,6 +387,11 @@ static bool handle_keybind_action(Server *server, const ConfigKeybind *bind) {
             }
         } else if (view->floating) {
             view->floating = false;
+
+            if (view->output && view->output->active_workspace) {
+                view->workspace = view->output->active_workspace;
+            }
+
             dwindle_add_view(&view->output->layout, view);
             view->tiled = true;
             server_arrange(server);
@@ -505,7 +535,7 @@ static void process_cursor(Server *server, uint64_t time_msec) {
     View *view = NULL;
     View *v;
     wl_list_for_each(v, &server->views, link) {
-        if (!v->mapped || v->fullscreen) continue;
+        if (!v->mapped || v->fullscreen || !v->output) continue;
         if (server->cursor->x >= v->x && server->cursor->x < v->x + v->width &&
             server->cursor->y >= v->y && server->cursor->y < v->y + v->height) {
             view = v;
@@ -758,7 +788,7 @@ static void handle_cursor_button(struct wl_listener *listener, void *data) {
         if (!view && !surface) {
             View *v;
             wl_list_for_each(v, &server->views, link) {
-                if (!v->mapped || v->fullscreen) continue;
+                if (!v->mapped || v->fullscreen || !v->output) continue;
                 if (server->cursor->x >= v->x && server->cursor->x < v->x + v->width &&
                     server->cursor->y >= v->y && server->cursor->y < v->y + v->height) {
                     view = v;
@@ -833,6 +863,15 @@ static void handle_cursor_button(struct wl_listener *listener, void *data) {
             Output *target = output_at(server, server->cursor->x, server->cursor->y);
 
             if (target && target != view->output) {
+                if (view->workspace && target->active_workspace &&
+                    view->workspace != target->active_workspace) {
+                    workspace_remove_view(view->workspace, view);
+                }
+
+                if (target->active_workspace) {
+                    view->workspace = target->active_workspace;
+                }
+
                 if (restore_tiled) {
                     view->output = target;
                 } else {
@@ -850,6 +889,10 @@ static void handle_cursor_button(struct wl_listener *listener, void *data) {
 
                 if (out) {
                     view->output = out;
+
+                    if (!view->workspace && out->active_workspace) {
+                        view->workspace = out->active_workspace;
+                    }
 
                     int rel_x = (int)server->cursor->x - out->x;
                     int rel_y = (int)server->cursor->y - out->y;
@@ -1007,6 +1050,40 @@ static void handle_keyboard_destroy(struct wl_listener *listener, void *data) {
     free(keyboard);
 }
 
+static struct xkb_keymap *keyboard_build_keymap(Server *server, struct xkb_context *context) {
+    struct xkb_rule_names names;
+    memset(&names, 0, sizeof(names));
+    if (server->config.kb_rules[0] != '\0') {
+        names.rules = server->config.kb_rules;
+    }
+    if (server->config.kb_model[0] != '\0') {
+        names.model = server->config.kb_model;
+    }
+    if (server->config.kb_layouts[0] != '\0') {
+        names.layout = server->config.kb_layouts;
+    }
+    if (server->config.kb_variant[0] != '\0') {
+        names.variant = server->config.kb_variant;
+    }
+    if (server->config.kb_options[0] != '\0') {
+        names.options = server->config.kb_options;
+    }
+    return xkb_keymap_new_from_names(context, &names, XKB_KEYMAP_COMPILE_NO_FLAGS);
+}
+void input_reload_keymaps(Server *server) {
+    if (!server) return;
+    struct xkb_context *context = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
+    if (!context) return;
+    struct xkb_keymap *keymap = keyboard_build_keymap(server, context);
+    if (keymap) {
+        Keyboard *kb;
+        wl_list_for_each(kb, &server->keyboards, link) {
+            wlr_keyboard_set_keymap(kb->wlr_keyboard, keymap);
+        }
+        xkb_keymap_unref(keymap);
+    }
+    xkb_context_unref(context);
+}
 static Keyboard *keyboard_create(Server *server, struct wlr_input_device *device) {
     Keyboard *keyboard = calloc(1, sizeof(Keyboard));
     if (!keyboard) return NULL;
@@ -1026,11 +1103,7 @@ static Keyboard *keyboard_create(Server *server, struct wlr_input_device *device
         return NULL;
     }
 
-    struct xkb_keymap *keymap = xkb_keymap_new_from_names(
-        context,
-        NULL,
-        XKB_KEYMAP_COMPILE_NO_FLAGS
-    );
+    struct xkb_keymap *keymap = keyboard_build_keymap(server, context);
 
     if (!keymap) {
         xkb_context_unref(context);

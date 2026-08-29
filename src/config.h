@@ -19,7 +19,8 @@ typedef enum {
     ACTION_MOVE_DIRECTION,
     ACTION_MOVE_OUTPUT_DIRECTION,
     ACTION_RESIZE_DIRECTION,
-    ACTION_SWITCH_VT
+    ACTION_SWITCH_VT,
+    ACTION_WORKSPACE
 } ConfigAction;
 
 typedef struct ConfigKeybind {
@@ -57,7 +58,12 @@ typedef struct Config {
 	double inactive_opacity;
 	int animation_duration_ms;
 	char wallpaper_path[1024];
-	WallpaperMode wallpaper_mode;
+    WallpaperMode wallpaper_mode;
+    char kb_rules[64];
+    char kb_model[64];
+    char kb_layouts[256];
+    char kb_variant[128];
+    char kb_options[256];
 	struct wl_list keybinds;
 	struct wl_list exec_once;
 	bool has_keybinds;
@@ -69,5 +75,5 @@ void config_load_default_keybinds(Config *config);
 void config_free_keybinds(Config *config);
 void config_destroy(Config *config);
 bool config_default_path(char *out, size_t out_size);
-
+void config_load_workspace_keybinds(Config *config);
 #endif

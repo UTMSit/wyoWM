@@ -3,16 +3,29 @@
 
 #include <stddef.h>
 #include <sys/types.h>
+#include <wayland-server-core.h>
+
+struct Server;
+
+typedef struct IPCClient {
+    int fd;
+    struct wl_event_source *source;
+    struct wl_list link;
+    struct Server *server;
+    char buf[4096];
+    size_t len;
+} IPCClient;
 
 typedef struct {
     int socket_fd;
     char *socket_path;
+    struct wl_event_loop *loop;
+    struct wl_event_source *listen_source;
+    struct wl_list clients;
+    struct Server *server;
 } IPCServer;
 
-int ipc_init(IPCServer *server, const char *path);
+int ipc_init(IPCServer *server, struct Server *compositor, struct wl_event_loop *loop, const char *path);
 void ipc_destroy(IPCServer *server);
-int ipc_accept(IPCServer *server);
-ssize_t ipc_read(int client_fd, void *buffer, size_t size);
-ssize_t ipc_write(int client_fd, const void *buffer, size_t size);
 
 #endif

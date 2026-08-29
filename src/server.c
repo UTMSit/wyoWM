@@ -9,6 +9,8 @@
 #include <dlfcn.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <dirent.h>
+#include <sys/stat.h>
 #include <sys/signalfd.h>
 #include <wlr/types/wlr_xdg_decoration_v1.h>
 #include <wlr/types/wlr_viewporter.h>
@@ -47,6 +49,8 @@ static void reload_config(Server *server) {
     if (!new_config.has_keybinds) {
         config_load_default_keybinds(&new_config);
     }
+
+    config_load_workspace_keybinds(&new_config);
 
     config_destroy(&server->config);
 
@@ -89,27 +93,13 @@ static void reload_config(Server *server) {
     View *view;
     wl_list_for_each(view, &server->views, link) {
         view_refresh_decorations(view);
-
-        if (view->mapped) {
-            double opacity = (server->focused_view == view)
-                ? server->config.active_opacity
-                : server->config.inactive_opacity;
-
-            int duration = server->config.animation_duration_ms;
-            if (duration < 0) duration = 0;
-
-            if (duration > 0) {
-                animation_set_target(&view->opacity, opacity, duration, EASING_EASE_OUT);
-                if (view->output) {
-                    wlr_output_schedule_frame(view->output->wlr_output);
-                }
-            } else {
-                view_set_opacity(view, opacity);
-            }
-        }
     }
-
+    input_reload_keymaps(server);
     server_arrange(server);
+}
+
+void server_reload_config(Server *server) {
+    reload_config(server);
 }
 
 static int handle_reload_fd(int fd, uint32_t mask, void *data) {
@@ -198,24 +188,53 @@ static void handle_new_toplevel(struct wl_listener *listener, void *data) {
 void server_view_mapped(Server *server, View *view) {
     if (!server || server->shutting_down || !view) return;
 
-    if (!view->output) {
-        if (server->active_output) {
-            view->output = server->active_output;
+    if (!view->workspace) {
+        if (!view->output) {
+            if (server->active_output) {
+                view->output = server->active_output;
+            }
+
+            if (!view->output && server->cursor) {
+                view->output = output_at(server, server->cursor->x, server->cursor->y);
+            }
+
+            if (!view->output && !wl_list_empty(&server->outputs)) {
+                Output *first = wl_container_of(server->outputs.next, first, link);
+                view->output = first;
+            }
         }
 
-        if (!view->output && server->cursor) {
-            view->output = output_at(server, server->cursor->x, server->cursor->y);
-        }
-
-        if (!view->output && !wl_list_empty(&server->outputs)) {
-            Output *first = wl_container_of(server->outputs.next, first, link);
-            view->output = first;
+        if (view->output && view->output->active_workspace) {
+            view->workspace = view->output->active_workspace;
         }
     }
 
-    if (!view->tiled && !view->floating && !view->fullscreen && !view->dragging && view->output) {
-        dwindle_add_view(&view->output->layout, view);
-        view->tiled = true;
+    if (view->workspace && view->workspace->output) {
+        view->output = view->workspace->output;
+    }
+
+    if (!view->workspace || !view->output) return;
+
+    if (!view->tiled && !view->floating && !view->fullscreen && !view->dragging) {
+        bool transient = view->type == VIEW_TYPE_XDG &&
+            view->xdg.toplevel &&
+            view->xdg.toplevel->parent != NULL;
+        if (transient) {
+            view->floating = true;
+            Output *out = view->output;
+            int width = view->width > 0 ? view->width : 800;
+            int height = view->height > 0 ? view->height : 600;
+            if (out) {
+                int x = (out->width - width) / 2;
+                int y = (out->height - height) / 2;
+                if (x < 0) x = 0;
+                if (y < 0) y = 0;
+                view_set_geometry(view, x, y, width, height);
+            }
+        } else {
+            workspace_add_view(view->workspace, view);
+            view->tiled = true;
+        }
     }
 
     server_focus_view(server, view);
@@ -229,6 +248,8 @@ void server_view_mapped(Server *server, View *view) {
         view->height > 0) {
         wlr_xdg_toplevel_set_size(view->xdg.toplevel, view->width, view->height);
     }
+    ipc_notify_workspaces(server);
+    ext_workspace_sync(server);
 }
 
 void server_view_unmapped(Server *server, View *view) {
@@ -241,23 +262,35 @@ void server_view_unmapped(Server *server, View *view) {
         server->drag.view = NULL;
     }
 
-    if (view->tiled && view->output) {
-        dwindle_remove_view(&view->output->layout, view);
-        view->tiled = false;
+    if (view->workspace) {
+        workspace_remove_view(view->workspace, view);
     }
+
+    view->tiled = false;
 
     if (server->focused_view == view) {
         View *next = NULL;
 
-        if (view->output) {
-            next = dwindle_focused_view(&view->output->layout);
-            if (!next) next = dwindle_first_view(&view->output->layout);
+        if (view->workspace && view->workspace->output) {
+            next = workspace_focused_view(view->workspace);
+            if (!next) {
+                next = workspace_first_view(view->workspace);
+            }
+        }
+
+        if (!next && server->active_output && server->active_output->active_workspace) {
+            next = workspace_focused_view(server->active_output->active_workspace);
+            if (!next) {
+                next = workspace_first_view(server->active_output->active_workspace);
+            }
         }
 
         server_focus_view(server, next);
     }
 
     server_arrange(server);
+    ipc_notify_workspaces(server);
+    ext_workspace_sync(server);
 }
 
 void server_view_destroyed(Server *server, View *view) {
@@ -270,69 +303,83 @@ void server_view_destroyed(Server *server, View *view) {
         server->drag.view = NULL;
     }
 
-    if (view->tiled && view->output) {
-        dwindle_remove_view(&view->output->layout, view);
-        view->tiled = false;
+    if (view->workspace) {
+        workspace_remove_view(view->workspace, view);
     }
+
+    view->tiled = false;
 
     if (server->focused_view == view) {
         View *next = NULL;
 
-        if (view->output) {
-            next = dwindle_focused_view(&view->output->layout);
-            if (!next) next = dwindle_first_view(&view->output->layout);
+        if (view->workspace && view->workspace->output) {
+            next = workspace_focused_view(view->workspace);
+            if (!next) {
+                next = workspace_first_view(view->workspace);
+            }
+        }
+
+        if (!next && server->active_output && server->active_output->active_workspace) {
+            next = workspace_focused_view(server->active_output->active_workspace);
+            if (!next) {
+                next = workspace_first_view(server->active_output->active_workspace);
+            }
         }
 
         server_focus_view(server, next);
     }
 
     server_arrange(server);
+    ipc_notify_workspaces(server);
+    ext_workspace_sync(server);
 }
 
 void server_focus_view(Server *server, View *view) {
-if (!server || server->shutting_down) return;
-if (view && !view->mapped) {
-view = NULL;
-}
-if (view && view->output) {
-server->active_output = view->output;
-}
-if (server->focused_view == view && !server->focused_surface) {
+    if (!server || server->shutting_down) return;
+    if (view && (!view->mapped || !view->output)) {
+        view = NULL;
+    }
     if (view && view->output) {
+        server->active_output = view->output;
+    }
+    if (server->focused_view == view && !server->focused_surface) {
+        if (view && view->output) {
+            dwindle_focus(&view->output->layout, view);
+        }
+    return;
+    }
+    listener_remove(&server->focused_surface_destroy);
+    server->focused_surface = NULL;
+    if (server->focused_view) {
+        view_unfocus(server->focused_view);
+    }
+    server->focused_view = view;
+    if (view) {
+        view_focus(view);
+    if (view->output) {
         dwindle_focus(&view->output->layout, view);
     }
-    return;
-}
-listener_remove(&server->focused_surface_destroy);
-server->focused_surface = NULL;
-if (server->focused_view) {
-view_unfocus(server->focused_view);
-}
-server->focused_view = view;
-if (view) {
-view_focus(view);
-if (view->output) {
-dwindle_focus(&view->output->layout, view);
-}
-if (server->seat &&
-server->active_keyboard &&
-view->type == VIEW_TYPE_XDG &&
-view->xdg.xdg_surface &&
-view->xdg.xdg_surface->surface) {
-wlr_seat_set_keyboard(server->seat, server->active_keyboard);
-wlr_seat_keyboard_notify_enter(
-server->seat,
-view->xdg.xdg_surface->surface,
-server->active_keyboard->keycodes,
-server->active_keyboard->num_keycodes,
-&server->active_keyboard->modifiers
-);
-}
-} else {
-if (server->seat) {
-wlr_seat_keyboard_notify_clear_focus(server->seat);
-}
-}
+    if (server->seat &&
+        server->active_keyboard &&
+        view->type == VIEW_TYPE_XDG &&
+        view->xdg.xdg_surface &&
+        view->xdg.xdg_surface->surface) {
+        wlr_seat_set_keyboard(server->seat, server->active_keyboard);
+        wlr_seat_keyboard_notify_enter(
+        server->seat,
+        view->xdg.xdg_surface->surface,
+        server->active_keyboard->keycodes,
+        server->active_keyboard->num_keycodes,
+        &server->active_keyboard->modifiers
+        );
+        }
+    } else {
+        if (server->seat) {
+            wlr_seat_keyboard_notify_clear_focus(server->seat);
+        }
+    }
+    ipc_notify_workspaces(server);
+    ext_workspace_sync(server);
 }
 
 static void handle_focused_surface_destroy(struct wl_listener *listener, void *data) {
@@ -550,6 +597,8 @@ bool server_init(Server *server) {
         config_load_default_keybinds(&server->config);
     }
 
+    config_load_workspace_keybinds(&server->config);
+
     wlr_scene_rect_set_color(server->background, server->config.background_color);
 
     if (server->config.wallpaper_path[0]) {
@@ -575,8 +624,13 @@ bool server_init(Server *server) {
 
     wl_list_init(&server->outputs);
     wl_list_init(&server->views);
+
+    wl_list_init(&server->workspaces);
     wl_list_init(&server->keyboards);
     wl_list_init(&server->focused_surface_destroy.link);
+
+    workspaces_init(server);
+    ext_workspace_init(server);
 
     server->request_set_selection.notify = handle_request_set_selection;
     wl_signal_add(&server->seat->events.request_set_selection, &server->request_set_selection);
@@ -622,7 +676,7 @@ bool server_init(Server *server) {
         snprintf(ipc_path, sizeof(ipc_path), "/tmp/wyowm.sock");
     }
 
-    ipc_init(&server->ipc, ipc_path);
+    ipc_init(&server->ipc, server, server->loop, ipc_path);
 
     return true;
 }
@@ -635,6 +689,104 @@ static void spawn_exec_once(void *data) {
             input_spawn_command(exec->command);
         }
     }
+}
+static bool find_binary(const char *name, char *out, size_t out_size) {
+    if (!name || !*name || !out || out_size == 0) return false;
+    const char *dirs[] = {
+        "/usr/libexec",
+        "/usr/lib",
+        "/usr/local/libexec",
+        "/usr/local/bin",
+        "/usr/bin",
+        "/bin"
+    };
+    for (size_t i = 0; i < sizeof(dirs) / sizeof(dirs[0]); i++) {
+        snprintf(out, out_size, "%s/%s", dirs[i], name);
+        if (access(out, X_OK) == 0) {
+            return true;
+        }
+    }
+    const char *path_env = getenv("PATH");
+    if (!path_env || !*path_env) return false;
+    char *copy = strdup(path_env);
+    if (!copy) return false;
+    bool found = false;
+    char *saveptr = NULL;
+    for (char *tok = strtok_r(copy, ":", &saveptr); tok; tok = strtok_r(NULL, ":", &saveptr)) {
+        snprintf(out, out_size, "%s/%s", tok, name);
+        if (access(out, X_OK) == 0) {
+            found = true;
+            break;
+        }
+    }
+    free(copy);
+    return found;
+}
+static bool process_running(const char *name) {
+    if (!name || !*name) return false;
+    DIR *dir = opendir("/proc");
+    if (!dir) return false;
+    size_t name_len = strlen(name);
+    bool found = false;
+    struct dirent *ent;
+    while (!found && (ent = readdir(dir)) != NULL) {
+        if (ent->d_name[0] < '0' || ent->d_name[0] > '9') {
+            continue;
+        }
+        char path[288];
+        snprintf(path, sizeof(path), "/proc/%s/cmdline", ent->d_name);
+        FILE *fp = fopen(path, "r");
+        if (!fp) continue;
+        char buf[512];
+        size_t n = fread(buf, 1, sizeof(buf) - 1, fp);
+        fclose(fp);
+        if (n == 0) continue;
+        buf[n] = '\0';
+        const char *base = strrchr(buf, '/');
+        const char *cmd = base ? base + 1 : buf;
+        if (strlen(cmd) == name_len && strncmp(cmd, name, name_len) == 0) {
+            found = true;
+        }
+    }
+    closedir(dir);
+    return found;
+}
+static void ensure_portal_config(void) {
+    char base[1024];
+    const char *config_home = getenv("XDG_CONFIG_HOME");
+    if (config_home && *config_home) {
+        snprintf(base, sizeof(base), "%s/xdg-desktop-portal", config_home);
+    } else {
+        const char *home = getenv("HOME");
+        if (!home || !*home) return;
+        snprintf(base, sizeof(base), "%s/.config/xdg-desktop-portal", home);
+    }
+    char path[1280];
+    snprintf(path, sizeof(path), "%s/portals.conf", base);
+    if (access(path, F_OK) == 0) return;
+    mkdir(base, 0755);
+    FILE *fp = fopen(path, "w");
+    if (!fp) return;
+    fputs("[preferred]\n", fp);
+    fputs("org.freedesktop.impl.portal.ScreenCast=wlr\n", fp);
+    fputs("org.freedesktop.impl.portal.Screenshot=wlr\n", fp);
+    fclose(fp);
+}
+static void spawn_portal_if_present(const char *name) {
+    char path[512];
+    if (!find_binary(name, path, sizeof(path))) return;
+    if (process_running(name)) return;
+    input_spawn_command(path);
+}
+static void spawn_session_portals(void *data) {
+    (void)data;
+    if (!getenv("DBUS_SESSION_BUS_ADDRESS")) return;
+    char path[512];
+    if (find_binary("xdg-desktop-portal-wlr", path, sizeof(path))) {
+        ensure_portal_config();
+        spawn_portal_if_present("xdg-desktop-portal-wlr");
+    }
+    spawn_portal_if_present("xdg-desktop-portal");
 }
 
 void server_run(Server *server) {
@@ -649,21 +801,30 @@ void server_run(Server *server) {
 
     setenv("WAYLAND_DISPLAY", socket, 1);
     wl_event_loop_add_idle(server->loop, spawn_exec_once, server);
+    wl_event_loop_add_idle(server->loop, spawn_session_portals, server);
     wl_display_run(server->display);
 }
 
 void server_destroy(Server *server) {
-if (!server) return;
-server->shutting_down = true;
-listener_remove(&server->focused_surface_destroy);
-server->focused_surface = NULL;
-server->focused_view = NULL;
-        layer_shell_destroy(server);
+    if (!server) return;
+    server->shutting_down = true;
+    listener_remove(&server->focused_surface_destroy);
+    server->focused_surface = NULL;
+    server->focused_view = NULL;
+    ext_workspace_destroy(server);
+    Workspace *ws, *tmp_ws;
+    wl_list_for_each_safe(ws, tmp_ws, &server->workspaces, link) {
+        workspace_destroy(ws);
+    }
+    layer_shell_destroy(server);
 
     while (!wl_list_empty(&server->outputs)) {
         Output *output = wl_container_of(server->outputs.next, output, link);
         output_destroy(output);
     }
+
+    ext_workspace_destroy(server);
+    workspaces_destroy(server);
 
     while (!wl_list_empty(&server->views)) {
         View *view = wl_container_of(server->views.next, view, link);

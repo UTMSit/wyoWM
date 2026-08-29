@@ -29,10 +29,13 @@
 #endif
 #include "arena.h"
 #include "ipc.h"
+#include "workspace.h"
+#include "ext_workspace.h"
 #include "config.h"
 #include "view.h"
 #include "output.h"
 #include "layout.h"
+#include "workspace.h"
 
 struct Server;
 struct View;
@@ -89,6 +92,7 @@ typedef struct Server {
 
     struct wl_list outputs;
     struct wl_list views;
+    struct wl_list workspaces;
     struct wl_list keyboards;
     struct wl_list layer_surfaces;
 
@@ -133,6 +137,11 @@ typedef struct Server {
     bool dnd_active;
     struct wlr_drag *dnd_drag;
 
+    struct wlr_ext_workspace_manager_v1 *ext_workspace_manager;
+    struct wlr_ext_workspace_group_handle_v1 *ext_workspace_group;
+    struct wl_listener ext_workspace_commit;
+    struct wl_listener ext_workspace_destroy_listener;
+
     Config config;
     int reload_fd;
     struct wl_event_source *reload_source;
@@ -152,5 +161,5 @@ void server_view_destroyed(Server *server, View *view);
 void server_focus_view(struct Server *server, View *view);
 void server_focus_surface(struct Server *server, struct wlr_surface *surface);
 void server_arrange(struct Server *server);
-
+void server_reload_config(struct Server *server);
 #endif

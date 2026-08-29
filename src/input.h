@@ -23,5 +23,5 @@ typedef struct Keyboard {
 void input_init(struct Server *server);
 void input_destroy(struct Server *server);
 void input_spawn_command(const char *command);
-
+void input_reload_keymaps(struct Server *server);
 #endif

@@ -88,6 +88,129 @@ static inline void listener_remove(struct wl_listener *listener) {
         wl_list_init(&listener->link);
     }
 }
+#if defined(WYO_HAS_FOREIGN_TOPLEVEL)
+static void handle_foreign_activate(struct wl_listener *listener, void *data) {
+    View *view = wl_container_of(listener, view, foreign_activate);
+    (void)data;
+    if (view->server && view->mapped) {
+        server_focus_view(view->server, view);
+    }
+}
+static void handle_foreign_close(struct wl_listener *listener, void *data) {
+    View *view = wl_container_of(listener, view, foreign_close);
+    (void)data;
+    view_close(view);
+}
+static void handle_foreign_destroy(struct wl_listener *listener, void *data) {
+    View *view = wl_container_of(listener, view, foreign_destroy);
+    (void)data;
+    view->foreign_handle = NULL;
+    view->foreign_output = NULL;
+    listener_remove(&view->foreign_activate);
+    listener_remove(&view->foreign_close);
+    listener_remove(&view->foreign_set_fullscreen);
+    listener_remove(&view->foreign_set_maximized);
+    listener_remove(&view->foreign_destroy);
+}
+static void view_foreign_sync_meta(View *view) {
+    if (!view->foreign_handle || !view->xdg.toplevel) return;
+    wlr_foreign_toplevel_handle_v1_set_title(
+        view->foreign_handle,
+        view->xdg.toplevel->title ? view->xdg.toplevel->title : ""
+    );
+    wlr_foreign_toplevel_handle_v1_set_app_id(
+        view->foreign_handle,
+        view->xdg.toplevel->app_id ? view->xdg.toplevel->app_id : ""
+    );
+}
+static void view_foreign_create(View *view) {
+    Server *server = view->server;
+    if (!server || view->foreign_handle) return;
+    if (!server->foreign_toplevel_manager) return;
+    struct wlr_foreign_toplevel_handle_v1 *handle =
+        wlr_foreign_toplevel_handle_v1_create(server->foreign_toplevel_manager);
+    if (!handle) return;
+    view->foreign_handle = handle;
+    view->foreign_output = NULL;
+    view->foreign_activated = false;
+    view->foreign_maximized = false;
+    view->foreign_fullscreen = false;
+    wl_list_init(&view->foreign_activate.link);
+    wl_list_init(&view->foreign_close.link);
+    wl_list_init(&view->foreign_set_fullscreen.link);
+    wl_list_init(&view->foreign_set_maximized.link);
+    wl_list_init(&view->foreign_destroy.link);
+    view->foreign_activate.notify = handle_foreign_activate;
+    wl_signal_add(&handle->events.request_activate, &view->foreign_activate);
+    view->foreign_close.notify = handle_foreign_close;
+    wl_signal_add(&handle->events.request_close, &view->foreign_close);
+    view->foreign_destroy.notify = handle_foreign_destroy;
+    wl_signal_add(&handle->events.destroy, &view->foreign_destroy);
+    view_foreign_sync_meta(view);
+}
+static void view_foreign_destroy(View *view) {
+    if (!view->foreign_handle) return;
+    struct wlr_foreign_toplevel_handle_v1 *handle = view->foreign_handle;
+    listener_remove(&view->foreign_activate);
+    listener_remove(&view->foreign_close);
+    listener_remove(&view->foreign_set_fullscreen);
+    listener_remove(&view->foreign_set_maximized);
+    listener_remove(&view->foreign_destroy);
+    view->foreign_handle = NULL;
+    view->foreign_output = NULL;
+    wlr_foreign_toplevel_handle_v1_destroy(handle);
+}
+#else
+static void view_foreign_sync_meta(View *view) {
+    (void)view;
+}
+static void view_foreign_create(View *view) {
+    (void)view;
+}
+static void view_foreign_destroy(View *view) {
+    (void)view;
+}
+#endif
+void view_foreign_sync(View *view) {
+#if defined(WYO_HAS_FOREIGN_TOPLEVEL)
+if (!view || !view->foreign_handle) return;
+struct wlr_output *out = view->output ? view->output->wlr_output : NULL;
+if (out != view->foreign_output) {
+    if (view->foreign_output) {
+        wlr_foreign_toplevel_handle_v1_output_leave(view->foreign_handle, view->foreign_output);
+    }
+    if (out) {
+        wlr_foreign_toplevel_handle_v1_output_enter(view->foreign_handle, out);
+    }
+    view->foreign_output = out;
+}
+bool activated = view->server && view->server->focused_view == view;
+if (activated != view->foreign_activated) {
+    wlr_foreign_toplevel_handle_v1_set_activated(view->foreign_handle, activated);
+    view->foreign_activated = activated;
+}
+if (view->tiled != view->foreign_maximized) {
+    wlr_foreign_toplevel_handle_v1_set_maximized(view->foreign_handle, view->tiled);
+    view->foreign_maximized = view->tiled;
+}
+if (view->fullscreen != view->foreign_fullscreen) {
+    wlr_foreign_toplevel_handle_v1_set_fullscreen(view->foreign_handle, view->fullscreen);
+    view->foreign_fullscreen = view->fullscreen;
+}
+#else
+    (void)view;
+#endif
+}
+static void handle_set_title(struct wl_listener *listener, void *data) {
+    View *view = wl_container_of(listener, view, set_title);
+    (void)data;
+    view_foreign_sync_meta(view);
+}
+static void handle_set_app_id(struct wl_listener *listener, void *data) {
+    View *view = wl_container_of(listener, view, set_app_id);
+    (void)data;
+    view_foreign_sync_meta(view);
+}
 
 static void handle_scene_node_destroy(struct wl_listener *listener, void *data) {
     View *view = wl_container_of(listener, view, scene_node_destroy);
@@ -117,16 +240,60 @@ View *view = wl_container_of(listener, view, xdg.request_resize);
 if (!view || !view->server || view->server->shutting_down) return;
 }
 
-static void handle_new_popup(struct wl_listener *listener, void *data) {
-View *view = wl_container_of(listener, view, xdg.new_popup);
-struct wlr_xdg_popup *popup = data;
-if (!view || !popup || !popup->base || popup->base->data) return;
-struct wlr_scene_tree *parent = view->scene_tree ? view->scene_tree : view->root_tree;
-if (!parent) return;
-struct wlr_scene_tree *popup_tree = wlr_scene_xdg_surface_create(parent, popup->base);
-if (popup_tree) {
-popup->base->data = popup_tree;
+typedef struct PopupConstrain {
+    View *view;
+    struct wlr_xdg_popup *popup;
+    struct wl_listener commit;
+    struct wl_listener destroy;
+} PopupConstrain;
+static void popup_constrain_finish(PopupConstrain *pc) {
+    listener_remove(&pc->commit);
+    listener_remove(&pc->destroy);
+    free(pc);
 }
+static void popup_constrain_destroy(struct wl_listener *listener, void *data) {
+    PopupConstrain *pc = wl_container_of(listener, pc, destroy);
+    (void)data;
+    popup_constrain_finish(pc);
+}
+static void popup_constrain_commit(struct wl_listener *listener, void *data) {
+    PopupConstrain *pc = wl_container_of(listener, pc, commit);
+    (void)data;
+    struct wlr_xdg_popup *popup = pc->popup;
+    if (!popup->base || !popup->base->initialized) return;
+    View *view = pc->view;
+    Output *out = view ? view->output : NULL;
+    if (!out) {
+        popup_constrain_finish(pc);
+        return;
+    }
+    struct wlr_box box;
+    box.x = out->x + out->usable_x - view->x;
+    box.y = out->y + out->usable_y - view->y;
+    box.width = out->usable_width;
+    box.height = out->usable_height;
+    wlr_xdg_popup_unconstrain_from_box(popup, &box);
+    popup_constrain_finish(pc);
+}
+static void handle_new_popup(struct wl_listener *listener, void *data) {
+    View *view = wl_container_of(listener, view, xdg.new_popup);
+    struct wlr_xdg_popup *popup = data;
+    if (!view || !popup || !popup->base || popup->base->data) return;
+    struct wlr_scene_tree *parent = view->scene_tree ? view->scene_tree : view->root_tree;
+    if (!parent) return;
+    struct wlr_scene_tree *popup_tree = wlr_scene_xdg_surface_create(parent, popup->base);
+    if (!popup_tree) return;
+    popup->base->data = popup_tree;
+    PopupConstrain *pc = calloc(1, sizeof(PopupConstrain));
+    if (!pc) return;
+    pc->view = view;
+    pc->popup = popup;
+    wl_list_init(&pc->commit.link);
+    wl_list_init(&pc->destroy.link);
+    pc->commit.notify = popup_constrain_commit;
+    wl_signal_add(&popup->base->surface->events.commit, &pc->commit);
+    pc->destroy.notify = popup_constrain_destroy;
+    wl_signal_add(&popup->base->events.destroy, &pc->destroy);
 }
 
 static void apply_buffer_opacity(struct wlr_scene_buffer *buffer, int x, int y, void *data) {
@@ -163,11 +330,6 @@ static void view_apply_geometry(View *view) {
         int x = (int)lround(view->anim_x.current);
         int y = (int)lround(view->anim_y.current);
         wlr_scene_node_set_position(&view->root_tree->node, x, y);
-    }
-
-    if (view->scene_tree && view->type == VIEW_TYPE_XDG && view->xdg.xdg_surface) {
-        struct wlr_box box = view->xdg.xdg_surface->geometry;
-        wlr_scene_node_set_position(&view->scene_tree->node, -box.x, -box.y);
     }
 }
 
@@ -214,9 +376,15 @@ static void view_update_border(View *view, bool focused) {
     view_schedule_frame(view);
 
     if (!enabled) return;
-
     int w = view->width;
     int h = view->height;
+    if (view->type == VIEW_TYPE_XDG && view->xdg.xdg_surface) {
+        struct wlr_box geo = view->xdg.xdg_surface->current.geometry;
+        if (geo.width > 0 && geo.height > 0) {
+            w = geo.width;
+            h = geo.height;
+        }
+    }
 
     int radius = 0;
     if (view->server && corner_radius_supported()) {
@@ -328,6 +496,8 @@ View *view_create_xdg(Server *server, struct wlr_xdg_surface *xdg_surface, struc
     wl_list_init(&view->xdg.request_move.link);
     wl_list_init(&view->xdg.request_resize.link);
     wl_list_init(&view->xdg.new_popup.link);
+    wl_list_init(&view->set_title.link);
+    wl_list_init(&view->set_app_id.link);
 
     view->scene_node_destroy.notify = handle_scene_node_destroy;
     wl_signal_add(&view->scene_tree->node.events.destroy, &view->scene_node_destroy);
@@ -354,7 +524,10 @@ View *view_create_xdg(Server *server, struct wlr_xdg_surface *xdg_surface, struc
     wl_signal_add(&toplevel->events.request_resize, &view->xdg.request_resize);
     view->xdg.new_popup.notify = handle_new_popup;
     wl_signal_add(&xdg_surface->events.new_popup, &view->xdg.new_popup);
-
+    view->set_title.notify = handle_set_title;
+    wl_signal_add(&toplevel->events.set_title, &view->set_title);
+    view->set_app_id.notify = handle_set_app_id;
+    wl_signal_add(&toplevel->events.set_app_id, &view->set_app_id);
     view->xdg.listeners_initialized = true;
 
     wl_list_insert(&server->views, &view->link);
@@ -391,8 +564,11 @@ void view_destroy(View *view) {
         listener_remove(&view->xdg.request_move);
         listener_remove(&view->xdg.request_resize);
         listener_remove(&view->xdg.new_popup);
+        listener_remove(&view->set_title);
+        listener_remove(&view->set_app_id);
         view->xdg.listeners_initialized = false;
     }
+    view_foreign_destroy(view);
 
     if (view->scene_tree) {
         listener_remove(&view->scene_node_destroy);
@@ -450,8 +626,11 @@ void view_cleanup_for_shutdown(View *view) {
         listener_remove(&view->xdg.request_move);
         listener_remove(&view->xdg.request_resize);
         listener_remove(&view->xdg.new_popup);
+        listener_remove(&view->set_title);
+        listener_remove(&view->set_app_id);
         view->xdg.listeners_initialized = false;
     }
+    view_foreign_destroy(view);
 
     if (view->scene_tree) {
         listener_remove(&view->scene_node_destroy);
@@ -560,6 +739,7 @@ void view_set_geometry(View *view, int x, int y, int width, int height) {
 
     bool focused = view->server && view->server->focused_view == view;
     view_update_border(view, focused);
+    view_foreign_sync(view);
 }
 
 void view_set_opacity(View *view, double opacity) {
@@ -582,24 +762,8 @@ void view_focus(View *view) {
         wlr_xdg_toplevel_set_activated(view->xdg.toplevel, true);
     }
 
-    double opacity = 1.0;
-    int duration = 0;
-    if (view->server) {
-        opacity = view->server->config.active_opacity;
-        duration = view->server->config.animation_duration_ms;
-    }
-    if (opacity < 0.0) opacity = 0.0;
-    if (opacity > 1.0) opacity = 1.0;
-    if (duration < 0) duration = 0;
-
-    if (duration > 0) {
-        animation_set_target(&view->opacity, opacity, duration, EASING_EASE_OUT);
-    } else {
-        view_set_opacity(view, opacity);
-    }
-
     view_update_border(view, true);
-
+    view_foreign_sync(view);
     if (view->output) {
         wlr_output_schedule_frame(view->output->wlr_output);
     }
@@ -612,24 +776,8 @@ void view_unfocus(View *view) {
         wlr_xdg_toplevel_set_activated(view->xdg.toplevel, false);
     }
 
-    double opacity = 1.0;
-    int duration = 0;
-    if (view->server) {
-        opacity = view->server->config.inactive_opacity;
-        duration = view->server->config.animation_duration_ms;
-    }
-    if (opacity < 0.0) opacity = 0.0;
-    if (opacity > 1.0) opacity = 1.0;
-    if (duration < 0) duration = 0;
-
-    if (duration > 0) {
-        animation_set_target(&view->opacity, opacity, duration, EASING_EASE_OUT);
-    } else {
-        view_set_opacity(view, opacity);
-    }
-
     view_update_border(view, false);
-
+    view_foreign_sync(view);
     if (view->output) {
         wlr_output_schedule_frame(view->output->wlr_output);
     }
@@ -638,13 +786,12 @@ void view_unfocus(View *view) {
 static void handle_toplevel_destroy(struct wl_listener *listener, void *data) {
     View *view = wl_container_of(listener, view, xdg.toplevel_destroy);
     (void)data;
-
     if (!view->xdg.listeners_initialized) return;
-
     listener_remove(&view->xdg.request_move);
     listener_remove(&view->xdg.request_resize);
     listener_remove(&view->xdg.toplevel_destroy);
-
+    listener_remove(&view->set_title);
+    listener_remove(&view->set_app_id);
     view->xdg.toplevel = NULL;
 }
 
@@ -670,6 +817,8 @@ static void handle_map(struct wl_listener *listener, void *data) {
     }
 
     server_view_mapped(view->server, view);
+    view_foreign_create(view);
+    view_foreign_sync(view);
     view_refresh_decorations(view);
 }
 
@@ -689,7 +838,7 @@ static void handle_unmap(struct wl_listener *listener, void *data) {
     }
 
     server_view_unmapped(view->server, view);
-
+    view_foreign_destroy(view);
     if (view->scene_tree) {
         wlr_scene_node_set_enabled(&view->scene_tree->node, false);
     }
@@ -717,6 +866,17 @@ static void handle_commit(struct wl_listener *listener, void *data) {
     }
 
     if (view->mapped) {
+        if (view->floating && !view->fullscreen && view->xdg.xdg_surface) {
+            struct wlr_box geo = view->xdg.xdg_surface->current.geometry;
+            if (geo.width > 0 && geo.height > 0 &&
+                (geo.width != view->width || geo.height != view->height)) {
+                view->width = geo.width;
+                view->height = geo.height;
+                view->target_width = geo.width;
+                view->target_height = geo.height;
+            }
+        }
+        view_foreign_sync(view);
         view_apply_geometry(view);
         view_refresh_decorations(view);
     }

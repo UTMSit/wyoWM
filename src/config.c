@@ -55,6 +55,15 @@ static uint32_t keycode_from_name(const char *name) {
     size_t len = strlen(name);
 
     if (len == 1) {
+        unsigned char c = (unsigned char)name[0];
+
+        if (isdigit(c)) {
+            if (c == '0') {
+                return KEY_0;
+            }
+            return KEY_1 + (uint32_t)(c - '1');
+        }
+
         return 0;
     }
 
@@ -225,6 +234,16 @@ static void parse_general_line(Config *config, const char *key, const char *valu
         } else if (!strcasecmp(value, "tile")) {
             config->wallpaper_mode = WALLPAPER_MODE_TILE;
         }
+    } else if (!strcasecmp(key, "kb_layouts") || !strcasecmp(key, "keyboard_layouts")) {
+        snprintf(config->kb_layouts, sizeof(config->kb_layouts), "%s", value);
+    } else if (!strcasecmp(key, "kb_variant") || !strcasecmp(key, "keyboard_variant")) {
+        snprintf(config->kb_variant, sizeof(config->kb_variant), "%s", value);
+    } else if (!strcasecmp(key, "kb_options") || !strcasecmp(key, "keyboard_options")) {
+        snprintf(config->kb_options, sizeof(config->kb_options), "%s", value);
+    } else if (!strcasecmp(key, "kb_model") || !strcasecmp(key, "keyboard_model")) {
+        snprintf(config->kb_model, sizeof(config->kb_model), "%s", value);
+    } else if (!strcasecmp(key, "kb_rules") || !strcasecmp(key, "keyboard_rules")) {
+        snprintf(config->kb_rules, sizeof(config->kb_rules), "%s", value);
     }
 }
 
@@ -319,11 +338,19 @@ static void parse_config_line(Config *config, const char *line) {
 				} else if (!strncasecmp(right, "resize", 6)) {
 					char *dir = trim(right + 6);
 					if (parse_direction(dir, &arg)) action = ACTION_RESIZE_DIRECTION;
-				} else if (!strncasecmp(right, "vt", 2)) {
-					char *num = trim(right + 2);
-					action = ACTION_SWITCH_VT;
-					arg = atoi(num);
-				}
+                } else if (!strncasecmp(right, "vt", 2)) {
+                    char *num = trim(right + 2);
+                    action = ACTION_SWITCH_VT;
+                    arg = atoi(num);
+                } else if (!strncasecmp(right, "workspace", 9)) {
+                    char *num = trim(right + 9);
+                    int id = atoi(num);
+                    if (id == 0) id = 10;
+                    if (id >= 1 && id <= 10) {
+                        action = ACTION_WORKSPACE;
+                        arg = id;
+                    }
+                }
 
 				if (action != ACTION_NONE) {
 					add_bind(config, modifiers, keycode, keysym, action, command, arg);
@@ -394,6 +421,64 @@ bool config_load_file(Config *config, const char *path) {
 	free(line);
 	fclose(fp);
 	return true;
+}
+
+static xkb_keysym_t digit_keysym(int digit) {
+    if (digit < 0) digit = 0;
+    if (digit > 9) digit = 9;
+    return (xkb_keysym_t)(XKB_KEY_0 + digit);
+}
+
+static bool has_super_keybind(Config *config, uint32_t keycode, xkb_keysym_t keysym) {
+    if (!config) return false;
+
+    ConfigKeybind *bind;
+    wl_list_for_each(bind, &config->keybinds, link) {
+        if (bind->modifiers != WLR_MODIFIER_LOGO) {
+            continue;
+        }
+
+        if (bind->keycode != 0 && bind->keycode == keycode) {
+            return true;
+        }
+
+        if (bind->keysym != XKB_KEY_NoSymbol && bind->keysym == keysym) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+void config_load_workspace_keybinds(Config *config) {
+    if (!config) return;
+
+    for (int id = 1; id <= 10; id++) {
+        int digit = (id == 10) ? 0 : id;
+
+        uint32_t keycode;
+        if (digit == 0) {
+            keycode = KEY_0;
+        } else {
+            keycode = KEY_1 + (uint32_t)(digit - 1);
+        }
+
+        xkb_keysym_t keysym = digit_keysym(digit);
+
+        if (has_super_keybind(config, keycode, keysym)) {
+            continue;
+        }
+
+        add_bind(
+            config,
+            WLR_MODIFIER_LOGO,
+            keycode,
+            keysym,
+            ACTION_WORKSPACE,
+            NULL,
+            id
+        );
+    }
 }
 
 void config_load_default_keybinds(Config *config) {

@@ -1,44 +1,45 @@
 CC = gcc
 PKG_CONFIG = pkg-config
 PKG_MODULES = wayland-server wlroots-0.20 xkbcommon libinput libdrm gbm pixman-1 gdk-pixbuf-2.0
-CFLAGS = -O3 -Wall -Wextra -Werror -march=native -flto -DWLR_USE_UNSTABLE $(shell $(PKG_CONFIG) --cflags $(PKG_MODULES))
+CFLAGS = -O3 -Wall -Wextra -Werror -march=native -flto=auto -DWLR_USE_UNSTABLE $(shell $(PKG_CONFIG) --cflags $(PKG_MODULES))
 LDFLAGS = $(shell $(PKG_CONFIG) --libs $(PKG_MODULES)) -lm -ldl
-
 SRCS = $(wildcard src/*.c)
 OBJS = $(SRCS:.c=.o)
-
 src/%.o: src/%.c
 	$(CC) $(CFLAGS) -c -o $@ $<
 eoc
-
+tools/%.o: tools/%.c
+	$(CC) $(CFLAGS) -c -o $@ $<
+eoc
 wyowm: $(OBJS)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 eoc
-
+wyoctl: tools/wyoctl.o
+	$(CC) $(CFLAGS) -o $@ $^
+eoc
 build:
 	call wyowm
+	call wyoctl
 eoc
-
 update:
 	call clean
 	call build
 	call install
 eoc
-
 install:
 	sudo install -Dm755 wyowm /usr/local/bin/wyowm
+	sudo install -Dm755 wyoctl /usr/local/bin/wyoctl
 	sudo install -Dm755 wyowm-session /usr/local/bin/wyowm-session
 	sudo install -Dm755 wyoconf-reload /usr/local/bin/wyoconf-reload
 	sudo install -Dm644 wyowm.desktop /usr/share/wayland-sessions/wyowm.desktop
 eoc
-
 uninstall:
 	sudo rm -f /usr/local/bin/wyowm
+	sudo rm -f /usr/local/bin/wyoctl
 	sudo rm -f /usr/local/bin/wyowm-session
 	sudo rm -f /usr/local/bin/wyoconf-reload
 	sudo rm -f /usr/share/wayland-sessions/wyowm.desktop
 eoc
-
 clean:
-	rm -f src/*.o src/*.d wyowm
+	rm -f src/*.o src/*.d tools/*.o wyowm wyoctl
 eoc

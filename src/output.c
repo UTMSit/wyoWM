@@ -97,9 +97,11 @@ Output *output_create(Server *server, struct wlr_output *wlr_output) {
     struct wlr_output_state state;
     wlr_output_state_init(&state);
     wlr_output_state_set_enabled(&state, true);
+
     if (mode) {
         wlr_output_state_set_mode(&state, mode);
     }
+
     wlr_output_commit_state(wlr_output, &state);
     wlr_output_state_finish(&state);
 
@@ -116,7 +118,11 @@ Output *output_create(Server *server, struct wlr_output *wlr_output) {
         return NULL;
     }
 
-    wlr_scene_output_layout_add_output(server->scene_layout, output->layout_output, output->scene_output);
+    wlr_scene_output_layout_add_output(
+        server->scene_layout,
+        output->layout_output,
+        output->scene_output
+    );
 
     output->frame.notify = handle_frame;
     wl_signal_add(&wlr_output->events.frame, &output->frame);
@@ -125,32 +131,35 @@ Output *output_create(Server *server, struct wlr_output *wlr_output) {
     wl_signal_add(&wlr_output->events.destroy, &output->destroy);
 
     wl_list_insert(&server->outputs, &output->link);
+    ext_workspace_output_add(server, output);
+
+    Workspace *ws = workspace_first_free(server);
+    if (!ws) {
+        ws = workspace_find(server, 1);
+    }
+    output->active_workspace = ws;
+    if (ws) {
+        ws->output = output;
+        ws->active = true;
+    }
 
     output_update_geometry(output);
     wallpaper_configure_output(output);
 
+    if (ws) {
+        workspace_show(ws, output);
+    }
+
     View *view;
     wl_list_for_each(view, &server->views, link) {
-        if (view->output) continue;
+        if (view->output || view->workspace) continue;
 
         view->output = output;
 
         if (!view->mapped) continue;
 
-        if (view->fullscreen) {
-            view_set_geometry(view, 0, 0, output->width, output->height);
-        } else if (view->floating) {
-            int width = view->width > 0 ? view->width : 800;
-            int height = view->height > 0 ? view->height : 600;
-
-            int x = (output->width - width) / 2;
-            int y = (output->height - height) / 2;
-
-            if (x < 0) x = 0;
-            if (y < 0) y = 0;
-
-            view_set_geometry(view, x, y, width, height);
-        } else {
+        if (output->active_workspace) {
+            view->workspace = output->active_workspace;
             dwindle_add_view(&output->layout, view);
             view->tiled = true;
         }
@@ -162,6 +171,7 @@ Output *output_create(Server *server, struct wlr_output *wlr_output) {
 
     if (!server->shutting_down) {
         server_arrange(server);
+        ipc_notify_workspaces(server);
     }
 
     return output;
@@ -172,20 +182,20 @@ void output_destroy(Output *output) {
 
     Server *server = output->server;
     bool shutting_down = server->shutting_down;
+    bool had_workspace = output->active_workspace != NULL;
 
-    if (shutting_down) {
-        View *view;
-        wl_list_for_each(view, &server->views, link) {
-            if (view->output != output) continue;
-
-            if (view->tiled) {
-                dwindle_remove_view(&output->layout, view);
-                view->tiled = false;
-            }
-
-            view->output = NULL;
+    if (output->active_workspace) {
+        workspace_hide(output->active_workspace);
+        output->active_workspace = NULL;
+    }
+    Workspace *ws_cleanup;
+    wl_list_for_each(ws_cleanup, &server->workspaces, link) {
+        if (ws_cleanup->last_output == output) {
+            ws_cleanup->last_output = NULL;
         }
-    } else {
+    }
+
+    if (!shutting_down) {
         Output *fallback = NULL;
         Output *candidate;
 
@@ -196,72 +206,22 @@ void output_destroy(Output *output) {
             }
         }
 
-        View *view;
-        wl_list_for_each(view, &server->views, link) {
-            if (view->output != output) continue;
-
-            if (view->tiled) {
-                dwindle_remove_view(&output->layout, view);
-                view->tiled = false;
-            }
-
-            view->output = fallback;
-
-            if (!fallback) continue;
-
-            if (view->fullscreen) {
-                view_set_geometry(view, 0, 0, fallback->width, fallback->height);
-                continue;
-            }
-
-            if (!view->mapped) continue;
-
-          		if (view->floating) {
-			int rel_x = view->x - fallback->x;
-			int rel_y = view->y - fallback->y;
-			if (rel_x < 0 || rel_y < 0 ||
-				rel_x >= fallback->width ||
-				rel_y >= fallback->height) {
-                    int width = view->width > 0 ? view->width : 800;
-                    int height = view->height > 0 ? view->height : 600;
-
-                    rel_x = (fallback->width - width) / 2;
-                    rel_y = (fallback->height - height) / 2;
-
-                    if (rel_x < 0) rel_x = 0;
-                    if (rel_y < 0) rel_y = 0;
-
-                    view_set_geometry(view, rel_x, rel_y, width, height);
-                } else {
-                    view_set_geometry(view, rel_x, rel_y, view->width, view->height);
-                }
-            } else {
-                dwindle_add_view(&fallback->layout, view);
-                view->tiled = true;
-            }
-        }
-
         if (server->active_output == output) {
             server->active_output = fallback;
         }
 
-        if (server->focused_view && server->focused_view->output == NULL) {
+        if (server->focused_view &&
+            (!server->focused_view->output || server->focused_view->output == output)) {
             View *next = NULL;
 
-            if (fallback) {
-                next = dwindle_focused_view(&fallback->layout);
-                if (!next) next = dwindle_first_view(&fallback->layout);
+            if (fallback && fallback->active_workspace) {
+                next = workspace_focused_view(fallback->active_workspace);
+                if (!next) {
+                    next = workspace_first_view(fallback->active_workspace);
+                }
             }
 
             server_focus_view(server, next);
-        } else if (server->focused_view) {
-            server_focus_view(server, server->focused_view);
-        } else if (fallback) {
-            View *next = dwindle_focused_view(&fallback->layout);
-            if (!next) next = dwindle_first_view(&fallback->layout);
-            server_focus_view(server, next);
-        } else {
-            server_focus_view(server, NULL);
         }
     }
 
@@ -269,7 +229,9 @@ void output_destroy(Output *output) {
     wl_list_remove(&output->destroy.link);
     wl_list_remove(&output->link);
 
-    dwindle_destroy(&output->layout);
+    if (!had_workspace) {
+        dwindle_destroy(&output->layout);
+    }
 
     if (output->wallpaper) {
         wlr_scene_node_destroy(&output->wallpaper->node);
@@ -288,5 +250,6 @@ void output_destroy(Output *output) {
 
     if (!shutting_down) {
         server_arrange(server);
+        ipc_notify_workspaces(server);
     }
 }
