@@ -52,20 +52,27 @@ static uint32_t keycode_from_name(const char *name) {
         return 0;
     }
 
-    size_t len = strlen(name);
-
-    if (len == 1) {
-        unsigned char c = (unsigned char)name[0];
-
-        if (isdigit(c)) {
-            if (c == '0') {
-                return KEY_0;
-            }
-            return KEY_1 + (uint32_t)(c - '1');
-        }
-
-        return 0;
-    }
+   	size_t len = strlen(name);
+	if (len == 1) {
+		unsigned char c = (unsigned char)name[0];
+		if (isdigit(c)) {
+			if (c == '0') {
+				return KEY_0;
+			}
+			return KEY_1 + (uint32_t)(c - '1');
+		}
+		char lower = (char)tolower(c);
+		if (lower >= 'a' && lower <= 'z') {
+			static const uint32_t letter_codes[26] = {
+				KEY_A, KEY_B, KEY_C, KEY_D, KEY_E, KEY_F, KEY_G,
+				KEY_H, KEY_I, KEY_J, KEY_K, KEY_L, KEY_M, KEY_N,
+				KEY_O, KEY_P, KEY_Q, KEY_R, KEY_S, KEY_T, KEY_U,
+				KEY_V, KEY_W, KEY_X, KEY_Y, KEY_Z
+			};
+			return letter_codes[lower - 'a'];
+		}
+		return 0;
+	}
 
     for (size_t i = 0; i < sizeof(key_name_table) / sizeof(key_name_table[0]); i++) {
         if (!strcasecmp(name, key_name_table[i].name)) {

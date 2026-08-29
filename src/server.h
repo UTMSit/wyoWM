@@ -17,6 +17,7 @@
 #include <wlr/types/wlr_seat.h>
 #include <wlr/types/wlr_cursor.h>
 #include <wlr/types/wlr_xcursor_manager.h>
+#include <wlr/types/wlr_xdg_activation_v1.h>
 #if __has_include(<wlr/types/wlr_xdg_output_v1.h>)
 #include <wlr/types/wlr_xdg_output_v1.h>
 #elif __has_include(<wlr/types/wlr_xdg_output_manager_v1.h>)
@@ -89,6 +90,8 @@ typedef struct Server {
     struct wlr_cursor *cursor;
     struct wlr_xcursor_manager *xcursor_manager;
     struct wlr_keyboard *active_keyboard;
+   	struct wlr_xdg_activation_v1 *xdg_activation;
+	struct wl_listener xdg_activation_request_activate;
 
     struct wl_list outputs;
     struct wl_list views;

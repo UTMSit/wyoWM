@@ -133,6 +133,24 @@ static void handle_decoration_destroy(struct wl_listener *listener, void *data) 
     listener_remove(&view->decoration_destroy);
 }
 
+static void handle_xdg_activation_request_activate(struct wl_listener *listener, void *data) {
+	Server *server = wl_container_of(listener, server, xdg_activation_request_activate);
+	struct wlr_xdg_activation_v1_request_activate_event *event = data;
+	if (!event || !event->surface || server->shutting_down) return;
+	struct wlr_surface *root = wlr_surface_get_root_surface(event->surface);
+	if (!root) return;
+	View *view;
+	wl_list_for_each(view, &server->views, link) {
+		if (view->type == VIEW_TYPE_XDG &&
+		    view->mapped &&
+		    view->xdg.xdg_surface &&
+		    view->xdg.xdg_surface->surface == root) {
+			server_focus_view(server, view);
+			return;
+		}
+	}
+}
+
 static void handle_request_set_selection(struct wl_listener *listener, void *data) {
     Server *server = wl_container_of(listener, server, request_set_selection);
     struct wlr_seat_request_set_selection_event *event = data;
@@ -215,27 +233,27 @@ void server_view_mapped(Server *server, View *view) {
 
     if (!view->workspace || !view->output) return;
 
-    if (!view->tiled && !view->floating && !view->fullscreen && !view->dragging) {
-        bool transient = view->type == VIEW_TYPE_XDG &&
-            view->xdg.toplevel &&
-            view->xdg.toplevel->parent != NULL;
-        if (transient) {
-            view->floating = true;
-            Output *out = view->output;
-            int width = view->width > 0 ? view->width : 800;
-            int height = view->height > 0 ? view->height : 600;
-            if (out) {
-                int x = (out->width - width) / 2;
-                int y = (out->height - height) / 2;
-                if (x < 0) x = 0;
-                if (y < 0) y = 0;
-                view_set_geometry(view, x, y, width, height);
-            }
-        } else {
-            workspace_add_view(view->workspace, view);
-            view->tiled = true;
-        }
-    }
+   	if (!view->tiled && !view->floating && !view->fullscreen && !view->dragging) {
+		bool transient = view->type == VIEW_TYPE_XDG &&
+		                 view->xdg.toplevel &&
+		                 view->xdg.toplevel->parent != NULL;
+		if (transient) {
+			view->floating = true;
+			Output *out = view->output;
+			if (out) {
+				int width = view->width > 0 ? view->width : 640;
+				int height = view->height > 0 ? view->height : 480;
+				int x = (out->width - width) / 2;
+				int y = (out->height - height) / 2;
+				if (x < 0) x = 0;
+				if (y < 0) y = 0;
+				view_set_geometry(view, x, y, width, height);
+			}
+		} else {
+			workspace_add_view(view->workspace, view);
+			view->tiled = true;
+		}
+	}
 
     server_focus_view(server, view);
     server_arrange(server);
@@ -537,7 +555,12 @@ bool server_init(Server *server) {
 	}
 
 	wlr_viewporter_create(server->display);
-    wlr_xdg_activation_v1_create(server->display);
+	server->xdg_activation = wlr_xdg_activation_v1_create(server->display);
+	if (server->xdg_activation) {
+		server->xdg_activation_request_activate.notify = handle_xdg_activation_request_activate;
+		wl_signal_add(&server->xdg_activation->events.request_activate,
+		              &server->xdg_activation_request_activate);
+	}
     wlr_relative_pointer_manager_v1_create(server->display);
     wlr_pointer_gestures_v1_create(server->display);
     wlr_screencopy_manager_v1_create(server->display);
@@ -786,7 +809,9 @@ static void spawn_session_portals(void *data) {
         ensure_portal_config();
         spawn_portal_if_present("xdg-desktop-portal-wlr");
     }
-    spawn_portal_if_present("xdg-desktop-portal");
+    spawn_portal_if_present("xdg-desktop-portal-gtk");
+	spawn_portal_if_present("xdg-desktop-portal-kde");
+	spawn_portal_if_present("xdg-desktop-portal");
 }
 
 void server_run(Server *server) {
@@ -831,9 +856,10 @@ void server_destroy(Server *server) {
         view_cleanup_for_shutdown(view);
     }
 
-    listener_remove(&server->new_output);
-    listener_remove(&server->new_toplevel);
-    listener_remove(&server->request_set_selection);
+   	listener_remove(&server->new_output);
+	listener_remove(&server->new_toplevel);
+	listener_remove(&server->request_set_selection);
+	listener_remove(&server->xdg_activation_request_activate);
     input_destroy(server);
 
     if (server->reload_source) {

@@ -511,26 +511,38 @@ static struct wlr_surface *surface_at_cursor(Server *server, double *sx, double 
 }
 
 static void process_cursor(Server *server, uint64_t time_msec) {
-    if (server->shutting_down) return;
-
-    double sx = 0.0;
-    double sy = 0.0;
-    struct wlr_surface *surface = surface_at_cursor(server, &sx, &sy);
-
-    if (surface) {
-        View *view = view_from_surface(server, surface);
-
-        if (view) {
-            if (server->focused_view != view || server->focused_surface) {
-                server_focus_view(server, view);
-            }
-        }
-
-        wlr_seat_pointer_notify_enter(server->seat, surface, sx, sy);
-        wlr_seat_pointer_notify_motion(server->seat, time_msec, sx, sy);
-        wlr_seat_pointer_notify_frame(server->seat);
-        return;
-    }
+	if (server->shutting_down) return;
+	if (server->seat->pointer_state.button_count > 0) {
+		struct wlr_surface *focused = server->seat->pointer_state.focused_surface;
+		if (focused) {
+			View *view = view_from_surface(server, focused);
+			if (view && view->scene_tree) {
+				double gx = (double)view->x + (double)view->scene_tree->node.x;
+				double gy = (double)view->y + (double)view->scene_tree->node.y;
+				wlr_seat_pointer_notify_motion(
+					server->seat, time_msec,
+					server->cursor->x - gx,
+					server->cursor->y - gy);
+				wlr_seat_pointer_notify_frame(server->seat);
+			}
+		}
+		return;
+	}
+	double sx = 0.0;
+	double sy = 0.0;
+	struct wlr_surface *surface = surface_at_cursor(server, &sx, &sy);
+	if (surface) {
+		View *view = view_from_surface(server, surface);
+		if (view) {
+			if (server->focused_view != view || server->focused_surface) {
+				server_focus_view(server, view);
+			}
+		}
+		wlr_seat_pointer_notify_enter(server->seat, surface, sx, sy);
+		wlr_seat_pointer_notify_motion(server->seat, time_msec, sx, sy);
+		wlr_seat_pointer_notify_frame(server->seat);
+		return;
+	}
 
     View *view = NULL;
     View *v;
@@ -938,17 +950,20 @@ static void handle_cursor_button(struct wl_listener *listener, void *data) {
         }
     }
 
-    process_cursor(server, event->time_msec);
-
-    wlr_seat_pointer_notify_button(
-        server->seat,
-        event->time_msec,
-        event->button,
-        event->state
-    );
-
-    wlr_seat_pointer_notify_frame(server->seat);
-}
+   	if (event->state == WL_POINTER_BUTTON_STATE_PRESSED) {
+		process_cursor(server, event->time_msec);
+	}
+	wlr_seat_pointer_notify_button(
+		server->seat,
+		event->time_msec,
+		event->button,
+		event->state
+	);
+	if (event->state == WL_POINTER_BUTTON_STATE_RELEASED) {
+		process_cursor(server, event->time_msec);
+	}
+	wlr_seat_pointer_notify_frame(server->seat);
+   }
 
 
 static int vt_from_keycode(uint32_t keycode) {

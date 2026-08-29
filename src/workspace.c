@@ -266,63 +266,97 @@ void workspace_show(Workspace *ws, Output *out) {
 }
 
 void server_switch_workspace(Server *server, Output *output, int id) {
-    if (!server || server->shutting_down || !output) return;
-    Workspace *target = NULL;
-    Workspace *current = output->active_workspace;
-    Workspace *ws;
-    wl_list_for_each(ws, &server->workspaces, link) {
-        if (ws->id == id) {
-            target = ws;
-            break;
-        }
-    }
-    if (!target || target == current) return;
-    Output *dest = output;
-    if (target->output) {
-        dest = target->output;
-    } else if (target->last_output) {
-        dest = target->last_output;
-    }
-    if (dest != output) {
-        Workspace *current_dest = dest->active_workspace;
-        if (current_dest && current_dest != target) {
-            workspace_hide(current_dest);
-        }
-        target->output = dest;
-        dest->active_workspace = target;
-        workspace_show(target, dest);
-        server->active_output = dest;
-        server_arrange(server);
-        View *next = workspace_focused_view(target);
-        if (!next) {
-            next = workspace_first_view(target);
-        }
-        server_focus_view(server, next);
-        if (server->cursor) {
-            wlr_cursor_warp(
-                server->cursor,
-                NULL,
-                dest->x + dest->width / 2.0,
-                dest->y + dest->height / 2.0
-            );
-            if (dest->wlr_output) {
-                wlr_output_schedule_frame(dest->wlr_output);
-            }
-        }
-        ext_workspace_sync(server);
-        return;
-    }
-    if (current) {
-        workspace_hide(current);
-    }
-    target->output = output;
-    output->active_workspace = target;
-    workspace_show(target, output);
-    server_arrange(server);
-    View *next = workspace_focused_view(target);
-    if (!next) {
-        next = workspace_first_view(target);
-    }
-    server_focus_view(server, next);
-    ext_workspace_sync(server);
+	if (!server || server->shutting_down || !output) return;
+
+	Workspace *target = NULL;
+	Workspace *current = output->active_workspace;
+	Workspace *ws;
+	wl_list_for_each(ws, &server->workspaces, link) {
+		if (ws->id == id) {
+			target = ws;
+			break;
+		}
+	}
+
+	if (!target || target == current) return;
+
+	if (workspace_empty(target) && target->output && target->output != output) {
+		Output *old_out = target->output;
+		bool was_active = (old_out->active_workspace == target);
+		workspace_hide(target);
+		target->last_output = NULL;
+		if (was_active) {
+			Workspace *replacement = NULL;
+			Workspace *w;
+			wl_list_for_each(w, &server->workspaces, link) {
+				if (w != target && !w->output) {
+					replacement = w;
+					break;
+				}
+			}
+			if (replacement) {
+				old_out->active_workspace = replacement;
+				workspace_show(replacement, old_out);
+			} else {
+				old_out->active_workspace = NULL;
+			}
+		}
+	}
+
+	Output *dest = output;
+	if (target->output) {
+		dest = target->output;
+	} else if (target->last_output) {
+		dest = target->last_output;
+	}
+
+	if (dest != output) {
+		Workspace *current_dest = dest->active_workspace;
+		if (current_dest && current_dest != target) {
+			workspace_hide(current_dest);
+		}
+		target->output = dest;
+		dest->active_workspace = target;
+		workspace_show(target, dest);
+
+		server->active_output = dest;
+		server_arrange(server);
+
+		View *next = workspace_focused_view(target);
+		if (!next) {
+			next = workspace_first_view(target);
+		}
+		server_focus_view(server, next);
+
+		if (server->cursor) {
+			wlr_cursor_warp(
+				server->cursor,
+				NULL,
+				dest->x + dest->width / 2.0,
+				dest->y + dest->height / 2.0
+			);
+			if (dest->wlr_output) {
+				wlr_output_schedule_frame(dest->wlr_output);
+			}
+		}
+		ext_workspace_sync(server);
+		return;
+	}
+
+	if (current) {
+		workspace_hide(current);
+	}
+
+	target->output = output;
+	output->active_workspace = target;
+	workspace_show(target, output);
+
+	server_arrange(server);
+
+	View *next = workspace_focused_view(target);
+	if (!next) {
+		next = workspace_first_view(target);
+	}
+	server_focus_view(server, next);
+	ext_workspace_sync(server);
 }

@@ -532,11 +532,11 @@ View *view_create_xdg(Server *server, struct wlr_xdg_surface *xdg_surface, struc
 
     wl_list_insert(&server->views, &view->link);
 
-    if (xdg_surface->initialized) {
-        wlr_xdg_toplevel_set_size(toplevel, 800, 600);
-    }
-
-    return view;
+   	bool transient = toplevel->parent != NULL;
+	if (!transient && xdg_surface->initialized) {
+		wlr_xdg_toplevel_set_size(toplevel, 800, 600);
+	}
+	return view;
 }
 
 void view_destroy(View *view) {
@@ -851,14 +851,16 @@ static void handle_commit(struct wl_listener *listener, void *data) {
     (void)data;
     if (!view || !view->server || view->server->shutting_down) return;
 
-    if (!view->mapped &&
-        view->xdg.xdg_surface &&
-        view->xdg.xdg_surface->initialized &&
-        view->xdg.toplevel &&
-        view->width == 0 &&
-        view->height == 0) {
-        wlr_xdg_toplevel_set_size(view->xdg.toplevel, 800, 600);
-    }
+    bool transient_commit = view->xdg.toplevel && view->xdg.toplevel->parent != NULL;
+	if (!transient_commit &&
+	    !view->mapped &&
+	    view->xdg.xdg_surface &&
+	    view->xdg.xdg_surface->initialized &&
+	    view->xdg.toplevel &&
+	    view->width == 0 &&
+	    view->height == 0) {
+		wlr_xdg_toplevel_set_size(view->xdg.toplevel, 800, 600);
+	}
 
     if (view->decoration && !view->decoration_mode_set && view->xdg.xdg_surface && view->xdg.xdg_surface->initialized) {
         wlr_xdg_toplevel_decoration_v1_set_mode(view->decoration, WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
