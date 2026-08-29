@@ -3,3 +3,5 @@
 *.o
 *.d
 .umk_cache
+wyoctl
+wyowm
