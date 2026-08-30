@@ -90,6 +90,13 @@ void workspace_add_view(Workspace *ws, View *view) {
     } else {
         view->output = NULL;
 
+        WorkspaceView *existing;
+        wl_list_for_each(existing, &ws->views, link) {
+            if (existing->view == view) {
+                return;
+            }
+        }
+
         WorkspaceView *wv = calloc(1, sizeof(WorkspaceView));
         if (!wv) return;
 

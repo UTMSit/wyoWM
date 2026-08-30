@@ -317,11 +317,12 @@ static void parse_config_line(Config *config, const char *line) {
 				const char *command = NULL;
 				int arg = 0;
 
-				if (!strncasecmp(right, "exec", 4)) {
+			if (!strncasecmp(right, "exec", 4) &&
+			    (right[4] == '\0' || isspace((unsigned char)right[4]))) {
 					char *cmd = trim(right + 4);
 					if (*cmd) {
-						action = ACTION_EXEC;
-						command = cmd;
+                        action = ACTION_EXEC;
+                        command = cmd;
 					}
 				} else if (!strcasecmp(right, "close")) {
 					action = ACTION_CLOSE;
@@ -345,19 +346,37 @@ static void parse_config_line(Config *config, const char *line) {
 				} else if (!strncasecmp(right, "resize", 6)) {
 					char *dir = trim(right + 6);
 					if (parse_direction(dir, &arg)) action = ACTION_RESIZE_DIRECTION;
-                } else if (!strncasecmp(right, "vt", 2)) {
-                    char *num = trim(right + 2);
-                    action = ACTION_SWITCH_VT;
-                    arg = atoi(num);
-                } else if (!strncasecmp(right, "workspace", 9)) {
-                    char *num = trim(right + 9);
-                    int id = atoi(num);
-                    if (id == 0) id = 10;
+				} else if (!strncasecmp(right, "vt", 2) &&
+                    (right[2] == '\0' ||
+                    isspace((unsigned char)right[2]) ||
+                    isdigit((unsigned char)right[2]))) {
+                        char *num = trim(right + 2);
+                        char *end = NULL;
+                        long vt = strtol(num, &end, 10);
+
+                        if (end != num && *end == '\0' && vt >= 1 && vt <= 63) {
+                            action = ACTION_SWITCH_VT;
+                            arg = (int)vt;
+                    }
+                } else if (!strncasecmp(right, "workspace", 9) &&
+                       (right[9] == '\0' ||
+                        isspace((unsigned char)right[9]) ||
+                        isdigit((unsigned char)right[9]))) {
+                char *num = trim(right + 9);
+                char *end = NULL;
+                long id = strtol(num, &end, 10);
+
+                if (end != num && *end == '\0') {
+                    if (id == 0) {
+                        id = 10;
+                    }
+
                     if (id >= 1 && id <= 10) {
                         action = ACTION_WORKSPACE;
-                        arg = id;
+                        arg = (int)id;
                     }
                 }
+            }
 
 				if (action != ACTION_NONE) {
 					add_bind(config, modifiers, keycode, keysym, action, command, arg);

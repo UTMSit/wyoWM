@@ -271,7 +271,7 @@ int ipc_init(IPCServer *ipc, Server *compositor, struct wl_event_loop *loop, con
         return -1;
     }
 
-    chmod(path, 0700);
+    chmod(path, 0600);
 
     if (listen(fd, 8) < 0) {
         close(fd);

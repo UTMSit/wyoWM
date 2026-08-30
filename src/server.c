@@ -689,8 +689,6 @@ bool server_init(Server *server) {
         return false;
     }
 
-    arena_init(&server->arena, 1024 * 1024 * 16);
-
     char ipc_path[1024];
     const char *runtime_dir = getenv("XDG_RUNTIME_DIR");
     if (runtime_dir && *runtime_dir) {
@@ -848,7 +846,6 @@ void server_destroy(Server *server) {
         output_destroy(output);
     }
 
-    ext_workspace_destroy(server);
     workspaces_destroy(server);
 
     while (!wl_list_empty(&server->views)) {
@@ -884,7 +881,6 @@ void server_destroy(Server *server) {
     }
 
     ipc_destroy(&server->ipc);
-    arena_free(&server->arena);
 
     if (server->display) {
         wl_display_destroy_clients(server->display);

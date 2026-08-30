@@ -182,7 +182,6 @@ void output_destroy(Output *output) {
 
     Server *server = output->server;
     bool shutting_down = server->shutting_down;
-    bool had_workspace = output->active_workspace != NULL;
 
     if (output->active_workspace) {
         workspace_hide(output->active_workspace);
@@ -229,9 +228,8 @@ void output_destroy(Output *output) {
     wl_list_remove(&output->destroy.link);
     wl_list_remove(&output->link);
 
-    if (!had_workspace) {
-        dwindle_destroy(&output->layout);
-    }
+    dwindle_destroy(&output->layout);
+
 
     if (output->wallpaper) {
         wlr_scene_node_destroy(&output->wallpaper->node);

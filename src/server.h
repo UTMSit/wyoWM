@@ -28,7 +28,6 @@
 #include <wlr/types/wlr_foreign_toplevel_management_v1.h>
 #define WYO_HAS_FOREIGN_TOPLEVEL 1
 #endif
-#include "arena.h"
 #include "ipc.h"
 #include "workspace.h"
 #include "ext_workspace.h"
@@ -118,7 +117,6 @@ typedef struct Server {
     struct wl_listener cursor_button;
     struct wl_listener cursor_axis;
 
-    Arena arena;
     IPCServer ipc;
     struct wlr_layer_shell_v1 *layer_shell;
     void *xdg_output_manager;
@@ -129,16 +127,17 @@ typedef struct Server {
     struct wlr_xdg_decoration_manager_v1 *xdg_decoration_manager;
     struct wl_listener new_xdg_decoration;
     struct wl_listener request_set_selection;
-
-	struct wl_listener request_start_drag;
+    struct wl_listener request_set_cursor;
+    struct wl_listener request_start_drag;
 	struct wl_listener start_drag;
 	struct wl_listener drag_focus;
 	struct wl_listener drag_motion;
 	struct wl_listener drag_drop;
 	struct wl_listener drag_destroy;
 	struct wlr_scene_tree *drag_icon_tree;
-    bool dnd_active;
-    struct wlr_drag *dnd_drag;
+	bool dnd_active;
+	bool cursor_restore_pending;
+	struct wlr_drag *dnd_drag;
 
     struct wlr_ext_workspace_manager_v1 *ext_workspace_manager;
     struct wlr_ext_workspace_group_handle_v1 *ext_workspace_group;

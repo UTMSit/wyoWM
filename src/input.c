@@ -513,20 +513,37 @@ static struct wlr_surface *surface_at_cursor(Server *server, double *sx, double 
 static void process_cursor(Server *server, uint64_t time_msec) {
 	if (server->shutting_down) return;
 	if (server->seat->pointer_state.button_count > 0) {
-		struct wlr_surface *focused = server->seat->pointer_state.focused_surface;
-		if (focused) {
-			View *view = view_from_surface(server, focused);
-			if (view && view->scene_tree) {
-				double gx = (double)view->x + (double)view->scene_tree->node.x;
-				double gy = (double)view->y + (double)view->scene_tree->node.y;
-				wlr_seat_pointer_notify_motion(
-					server->seat, time_msec,
-					server->cursor->x - gx,
-					server->cursor->y - gy);
-				wlr_seat_pointer_notify_frame(server->seat);
-			}
-		}
-		return;
+    struct wlr_surface *focused = server->seat->pointer_state.focused_surface;
+    if (!focused) {
+        return;
+    }
+
+    double sx = 0.0;
+    double sy = 0.0;
+    struct wlr_surface *under = surface_at_cursor(server, &sx, &sy);
+
+    if (under == focused) {
+        wlr_seat_pointer_notify_motion(server->seat, time_msec, sx, sy);
+        wlr_seat_pointer_notify_frame(server->seat);
+        return;
+    }
+
+    View *view = view_from_surface(server, focused);
+        if (view && view->root_tree && view->scene_tree) {
+            double gx = (double)view->root_tree->node.x + (double)view->scene_tree->node.x;
+            double gy = (double)view->root_tree->node.y + (double)view->scene_tree->node.y;
+
+            wlr_seat_pointer_notify_motion(
+                server->seat,
+                time_msec,
+                server->cursor->x - gx,
+                server->cursor->y - gy
+            );
+
+            wlr_seat_pointer_notify_frame(server->seat);
+        }
+
+        return;
 	}
 	double sx = 0.0;
 	double sy = 0.0;
@@ -538,7 +555,17 @@ static void process_cursor(Server *server, uint64_t time_msec) {
 				server_focus_view(server, view);
 			}
 		}
-		wlr_seat_pointer_notify_enter(server->seat, surface, sx, sy);
+		if (server->seat->pointer_state.focused_surface != surface) {
+            if (server->xcursor_manager) {
+                wlr_cursor_set_xcursor(
+                    server->cursor,
+                    server->xcursor_manager,
+                    "left_ptr"
+                );
+            }
+
+            wlr_seat_pointer_notify_enter(server->seat, surface, sx, sy);
+		}
 		wlr_seat_pointer_notify_motion(server->seat, time_msec, sx, sy);
 		wlr_seat_pointer_notify_frame(server->seat);
 		return;
@@ -564,15 +591,34 @@ static void process_cursor(Server *server, uint64_t time_msec) {
         if (server->focused_view != view || server->focused_surface) {
             server_focus_view(server, view);
         }
+
+        if (server->xcursor_manager) {
+            wlr_cursor_set_xcursor(
+                server->cursor,
+                server->xcursor_manager,
+                "left_ptr"
+            );
+        }
+
         wlr_seat_pointer_clear_focus(server->seat);
         wlr_seat_pointer_notify_frame(server->seat);
         return;
     }
 
     server_focus_view(server, NULL);
+
+    if (server->xcursor_manager) {
+        wlr_cursor_set_xcursor(
+            server->cursor,
+            server->xcursor_manager,
+            "left_ptr"
+        );
+    }
+
     wlr_seat_keyboard_notify_clear_focus(server->seat);
     wlr_seat_pointer_clear_focus(server->seat);
     wlr_seat_pointer_notify_frame(server->seat);
+    server->cursor_restore_pending = false;
 }
 
 static void process_drag(Server *server) {
@@ -735,6 +781,18 @@ static void handle_cursor_motion(struct wl_listener *listener, void *data) {
         );
     }
 
+    if (!server->drag.active && !server->dnd_active && server->cursor_restore_pending) {
+        if (server->xcursor_manager) {
+            wlr_cursor_set_xcursor(
+                server->cursor,
+                server->xcursor_manager,
+                "left_ptr"
+            );
+        }
+
+        server->cursor_restore_pending = false;
+    }
+
     if (server->drag.active) {
         process_drag(server);
     } else {
@@ -755,6 +813,18 @@ static void handle_cursor_motion_absolute(struct wl_listener *listener, void *da
             (int)server->cursor->x,
             (int)server->cursor->y
         );
+    }
+
+    if (!server->drag.active && !server->dnd_active && server->cursor_restore_pending) {
+        if (server->xcursor_manager) {
+            wlr_cursor_set_xcursor(
+                server->cursor,
+                server->xcursor_manager,
+                "left_ptr"
+            );
+        }
+
+        server->cursor_restore_pending = false;
     }
 
     if (server->drag.active) {
@@ -862,6 +932,15 @@ static void handle_cursor_button(struct wl_listener *listener, void *data) {
                 }
 
                 wlr_seat_pointer_clear_focus(server->seat);
+
+                if (server->xcursor_manager) {
+                    wlr_cursor_set_xcursor(
+                        server->cursor,
+                        server->xcursor_manager,
+                        "left_ptr"
+                    );
+                }
+
                 return;
             }
         }
@@ -934,6 +1013,18 @@ static void handle_cursor_button(struct wl_listener *listener, void *data) {
         server->drag.tiled_resize = false;
         server->drag.view = NULL;
         server->drag.output = NULL;
+
+        if (!server->drag.active && !server->dnd_active && server->cursor_restore_pending) {
+            if (server->xcursor_manager) {
+                wlr_cursor_set_xcursor(
+                    server->cursor,
+                    server->xcursor_manager,
+                    "left_ptr"
+                );
+            }
+
+            server->cursor_restore_pending = false;
+        }
 
         process_cursor(server, event->time_msec);
         return;
@@ -1030,6 +1121,10 @@ static void handle_key(struct wl_listener *listener, void *data) {
     }
 
     if (!handled) {
+        if (event->state == WL_KEYBOARD_KEY_STATE_PRESSED) {
+            server->cursor_restore_pending = true;
+        }
+
         wlr_seat_set_keyboard(server->seat, keyboard->wlr_keyboard);
         wlr_seat_keyboard_notify_key(server->seat, event->time_msec, event->keycode, event->state);
     }
@@ -1194,6 +1289,37 @@ static void handle_cursor_axis(struct wl_listener *listener, void *data) {
     wlr_seat_pointer_notify_frame(server->seat);
 }
 
+static void handle_request_set_cursor(struct wl_listener *listener, void *data) {
+    Server *server = wl_container_of(listener, server, request_set_cursor);
+    struct wlr_seat_pointer_request_set_cursor_event *event = data;
+
+    if (!server || !server->seat || !server->cursor || !event) {
+        return;
+    }
+
+    if (event->seat_client != server->seat->pointer_state.focused_client) {
+        return;
+    }
+
+    if (event->surface) {
+        wlr_cursor_set_surface(
+            server->cursor,
+            event->surface,
+            event->hotspot_x,
+            event->hotspot_y
+        );
+        return;
+    }
+
+    if (server->xcursor_manager) {
+        wlr_cursor_set_xcursor(
+            server->cursor,
+            server->xcursor_manager,
+            "left_ptr"
+        );
+    }
+}
+
 void input_init(Server *server) {
     wl_list_init(&server->keyboards);
 
@@ -1227,6 +1353,9 @@ void input_init(Server *server) {
 	server->start_drag.notify = handle_start_drag;
 	wl_signal_add(&server->seat->events.start_drag, &server->start_drag);
 
+	server->request_set_cursor.notify = handle_request_set_cursor;
+	wl_signal_add(&server->seat->events.request_set_cursor, &server->request_set_cursor);
+
     wlr_seat_set_capabilities(
         server->seat,
         WL_SEAT_CAPABILITY_KEYBOARD | WL_SEAT_CAPABILITY_POINTER
@@ -1257,6 +1386,11 @@ void input_destroy(Server *server) {
    	wl_list_remove(&server->request_start_drag.link);
 	wl_list_remove(&server->start_drag.link);
     wlr_seat_set_keyboard(server->seat, NULL);
+
+    if (!wl_list_empty(&server->request_set_cursor.link)) {
+        wl_list_remove(&server->request_set_cursor.link);
+        wl_list_init(&server->request_set_cursor.link);
+    }
 
     if (server->cursor) {
         wlr_cursor_destroy(server->cursor);

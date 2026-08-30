@@ -91,6 +91,18 @@ void ext_workspace_init(Server *server) {
 void ext_workspace_destroy(Server *server) {
     if (!server) return;
 
+    if (server->ext_workspace_manager) {
+        if (!wl_list_empty(&server->ext_workspace_commit.link)) {
+            wl_list_remove(&server->ext_workspace_commit.link);
+            wl_list_init(&server->ext_workspace_commit.link);
+        }
+
+        if (!wl_list_empty(&server->ext_workspace_destroy_listener.link)) {
+            wl_list_remove(&server->ext_workspace_destroy_listener.link);
+            wl_list_init(&server->ext_workspace_destroy_listener.link);
+        }
+    }
+
     Workspace *ws;
     wl_list_for_each(ws, &server->workspaces, link) {
         if (ws->handle) {
