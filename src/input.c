@@ -510,52 +510,56 @@ static struct wlr_surface *surface_at_cursor(Server *server, double *sx, double 
     return scene_surface->surface;
 }
 
+static bool surface_is_popup(Server *server, struct wlr_surface *surface) {
+    if (!server || !surface) return false;
+
+    PopupSurface *popup_surface;
+
+    wl_list_for_each(popup_surface, &server->popup_surfaces, link) {
+        if (popup_surface->surface == surface) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 static void process_cursor(Server *server, uint64_t time_msec) {
-	if (server->shutting_down) return;
-	if (server->seat->pointer_state.button_count > 0) {
-    struct wlr_surface *focused = server->seat->pointer_state.focused_surface;
-    if (!focused) {
+    if (server->shutting_down) return;
+
+    if (server->seat->pointer_state.button_count > 0) {
+        struct wlr_surface *focused = server->seat->pointer_state.focused_surface;
+        if (!focused) {
+            return;
+        }
+
+        double sx = 0.0;
+        double sy = 0.0;
+        struct wlr_surface *under = surface_at_cursor(server, &sx, &sy);
+
+        if (under == focused) {
+            wlr_seat_pointer_notify_motion(server->seat, time_msec, sx, sy);
+            wlr_seat_pointer_notify_frame(server->seat);
+        }
+
         return;
     }
 
     double sx = 0.0;
     double sy = 0.0;
-    struct wlr_surface *under = surface_at_cursor(server, &sx, &sy);
+    struct wlr_surface *surface = surface_at_cursor(server, &sx, &sy);
 
-    if (under == focused) {
-        wlr_seat_pointer_notify_motion(server->seat, time_msec, sx, sy);
-        wlr_seat_pointer_notify_frame(server->seat);
-        return;
-    }
+    if (surface) {
+        bool is_popup = surface_is_popup(server, surface);
+        View *view = view_from_surface(server, surface);
 
-    View *view = view_from_surface(server, focused);
-        if (view && view->root_tree && view->scene_tree) {
-            double gx = (double)view->root_tree->node.x + (double)view->scene_tree->node.x;
-            double gy = (double)view->root_tree->node.y + (double)view->scene_tree->node.y;
-
-            wlr_seat_pointer_notify_motion(
-                server->seat,
-                time_msec,
-                server->cursor->x - gx,
-                server->cursor->y - gy
-            );
-
-            wlr_seat_pointer_notify_frame(server->seat);
+        if (view && !is_popup) {
+            if (server->focused_view != view || server->focused_surface) {
+                server_focus_view(server, view);
+            }
         }
 
-        return;
-	}
-	double sx = 0.0;
-	double sy = 0.0;
-	struct wlr_surface *surface = surface_at_cursor(server, &sx, &sy);
-	if (surface) {
-		View *view = view_from_surface(server, surface);
-		if (view) {
-			if (server->focused_view != view || server->focused_surface) {
-				server_focus_view(server, view);
-			}
-		}
-		if (server->seat->pointer_state.focused_surface != surface) {
+        if (server->seat->pointer_state.focused_surface != surface) {
             if (server->xcursor_manager) {
                 wlr_cursor_set_xcursor(
                     server->cursor,
@@ -565,16 +569,19 @@ static void process_cursor(Server *server, uint64_t time_msec) {
             }
 
             wlr_seat_pointer_notify_enter(server->seat, surface, sx, sy);
-		}
-		wlr_seat_pointer_notify_motion(server->seat, time_msec, sx, sy);
-		wlr_seat_pointer_notify_frame(server->seat);
-		return;
-	}
+        }
+
+        wlr_seat_pointer_notify_motion(server->seat, time_msec, sx, sy);
+        wlr_seat_pointer_notify_frame(server->seat);
+        return;
+    }
 
     View *view = NULL;
     View *v;
+
     wl_list_for_each(v, &server->views, link) {
         if (!v->mapped || v->fullscreen || !v->output) continue;
+
         if (server->cursor->x >= v->x && server->cursor->x < v->x + v->width &&
             server->cursor->y >= v->y && server->cursor->y < v->y + v->height) {
             view = v;
@@ -618,6 +625,7 @@ static void process_cursor(Server *server, uint64_t time_msec) {
     wlr_seat_keyboard_notify_clear_focus(server->seat);
     wlr_seat_pointer_clear_focus(server->seat);
     wlr_seat_pointer_notify_frame(server->seat);
+
     server->cursor_restore_pending = false;
 }
 
@@ -1035,9 +1043,12 @@ static void handle_cursor_button(struct wl_listener *listener, void *data) {
         double sy = 0.0;
         struct wlr_surface *surface = surface_at_cursor(server, &sx, &sy);
 
-        if (surface && !view_from_surface(server, surface) &&
-            surface_allows_keyboard(server, surface)) {
-            server_focus_surface(server, surface);
+        if (surface && surface_allows_keyboard(server, surface)) {
+            bool is_popup = surface_is_popup(server, surface);
+
+            if (!view_from_surface(server, surface) || is_popup) {
+                server_focus_surface(server, surface);
+            }
         }
     }
 

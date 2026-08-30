@@ -62,6 +62,12 @@ typedef struct DragState {
     int orig_height;
 } DragState;
 
+typedef struct PopupSurface {
+    struct wlr_surface *surface;
+    struct wl_listener destroy;
+    struct wl_list link;
+} PopupSurface;
+
 typedef struct Server {
     struct wl_display *display;
     struct wl_event_loop *loop;
@@ -97,6 +103,7 @@ typedef struct Server {
     struct wl_list workspaces;
     struct wl_list keyboards;
     struct wl_list layer_surfaces;
+    struct wl_list popup_surfaces;
 
     View *focused_view;
     struct wlr_surface *focused_surface;

@@ -650,6 +650,7 @@ bool server_init(Server *server) {
 
     wl_list_init(&server->workspaces);
     wl_list_init(&server->keyboards);
+    wl_list_init(&server->popup_surfaces);
     wl_list_init(&server->focused_surface_destroy.link);
 
     workspaces_init(server);
@@ -853,6 +854,20 @@ void server_destroy(Server *server) {
         view_cleanup_for_shutdown(view);
     }
 
+    PopupSurface *popup_surface;
+    PopupSurface *popup_surface_tmp;
+
+    wl_list_for_each_safe(popup_surface, popup_surface_tmp, &server->popup_surfaces, link) {
+        if (!wl_list_empty(&popup_surface->destroy.link)) {
+            wl_list_remove(&popup_surface->destroy.link);
+            wl_list_init(&popup_surface->destroy.link);
+        }
+
+        wl_list_remove(&popup_surface->link);
+        free(popup_surface);
+    }
+
+    wl_list_init(&server->popup_surfaces);
    	listener_remove(&server->new_output);
 	listener_remove(&server->new_toplevel);
 	listener_remove(&server->request_set_selection);

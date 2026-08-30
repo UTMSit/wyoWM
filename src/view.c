@@ -259,39 +259,126 @@ static void popup_constrain_destroy(struct wl_listener *listener, void *data) {
 static void popup_constrain_commit(struct wl_listener *listener, void *data) {
     PopupConstrain *pc = wl_container_of(listener, pc, commit);
     (void)data;
+
     struct wlr_xdg_popup *popup = pc->popup;
     if (!popup->base || !popup->base->initialized) return;
+
     View *view = pc->view;
     Output *out = view ? view->output : NULL;
     if (!out) {
         popup_constrain_finish(pc);
         return;
     }
+
+    if (!popup->parent ||
+        !view->xdg.xdg_surface ||
+        popup->parent != view->xdg.xdg_surface->surface) {
+        popup_constrain_finish(pc);
+        return;
+    }
+
+    int origin_x = view->x;
+    int origin_y = view->y;
+
+    if (view->root_tree) {
+        origin_x = view->root_tree->node.x;
+        origin_y = view->root_tree->node.y;
+    }
+
+    if (view->scene_tree) {
+        origin_x += view->scene_tree->node.x;
+        origin_y += view->scene_tree->node.y;
+    }
+
     struct wlr_box box;
-    box.x = out->x + out->usable_x - view->x;
-    box.y = out->y + out->usable_y - view->y;
+    box.x = out->x + out->usable_x - origin_x;
+    box.y = out->y + out->usable_y - origin_y;
     box.width = out->usable_width;
     box.height = out->usable_height;
+
     wlr_xdg_popup_unconstrain_from_box(popup, &box);
+
+    if (popup->base->data) {
+        struct wlr_scene_tree *tree = popup->base->data;
+        wlr_scene_node_raise_to_top(&tree->node);
+    }
+
     popup_constrain_finish(pc);
 }
+
+static void popup_surface_destroy_notify(struct wl_listener *listener, void *data) {
+    PopupSurface *popup_surface = wl_container_of(listener, popup_surface, destroy);
+    (void)data;
+
+    if (!wl_list_empty(&popup_surface->destroy.link)) {
+        wl_list_remove(&popup_surface->destroy.link);
+        wl_list_init(&popup_surface->destroy.link);
+    }
+
+    if (!wl_list_empty(&popup_surface->link)) {
+        wl_list_remove(&popup_surface->link);
+        wl_list_init(&popup_surface->link);
+    }
+
+    free(popup_surface);
+}
+
 static void handle_new_popup(struct wl_listener *listener, void *data) {
     View *view = wl_container_of(listener, view, xdg.new_popup);
     struct wlr_xdg_popup *popup = data;
+
     if (!view || !popup || !popup->base || popup->base->data) return;
+
     struct wlr_scene_tree *parent = view->scene_tree ? view->scene_tree : view->root_tree;
     if (!parent) return;
+
+    if (popup->parent &&
+        view->xdg.xdg_surface &&
+        popup->parent != view->xdg.xdg_surface->surface &&
+        popup->parent->data) {
+        parent = popup->parent->data;
+    }
+
     struct wlr_scene_tree *popup_tree = wlr_scene_xdg_surface_create(parent, popup->base);
     if (!popup_tree) return;
+
     popup->base->data = popup_tree;
+
+    if (popup->base->surface) {
+        popup->base->surface->data = popup_tree;
+    }
+
+    if (view->server) {
+        PopupSurface *popup_surface = calloc(1, sizeof(PopupSurface));
+
+        if (popup_surface) {
+            popup_surface->surface = popup->base->surface;
+
+            wl_list_init(&popup_surface->link);
+            wl_list_init(&popup_surface->destroy.link);
+
+            popup_surface->destroy.notify = popup_surface_destroy_notify;
+            wl_signal_add(&popup->base->surface->events.destroy, &popup_surface->destroy);
+
+            wl_list_insert(&view->server->popup_surfaces, &popup_surface->link);
+        }
+    }
+
+    wlr_scene_node_set_enabled(&popup_tree->node, true);
+    wlr_scene_node_raise_to_top(&popup_tree->node);
+
     PopupConstrain *pc = calloc(1, sizeof(PopupConstrain));
     if (!pc) return;
+
     pc->view = view;
     pc->popup = popup;
+
     wl_list_init(&pc->commit.link);
     wl_list_init(&pc->destroy.link);
+
     pc->commit.notify = popup_constrain_commit;
     wl_signal_add(&popup->base->surface->events.commit, &pc->commit);
+
     pc->destroy.notify = popup_constrain_destroy;
     wl_signal_add(&popup->base->events.destroy, &pc->destroy);
 }
