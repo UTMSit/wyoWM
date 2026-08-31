@@ -1042,11 +1042,9 @@ static void handle_cursor_button(struct wl_listener *listener, void *data) {
         double sx = 0.0;
         double sy = 0.0;
         struct wlr_surface *surface = surface_at_cursor(server, &sx, &sy);
-
         if (surface && surface_allows_keyboard(server, surface)) {
             bool is_popup = surface_is_popup(server, surface);
-
-            if (!view_from_surface(server, surface) || is_popup) {
+            if (!is_popup && !view_from_surface(server, surface)) {
                 server_focus_surface(server, surface);
             }
         }

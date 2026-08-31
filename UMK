@@ -41,5 +41,5 @@ uninstall:
 	sudo rm -f /usr/share/wayland-sessions/wyowm.desktop
 eoc
 clean:
-	rm -f src/*.o src/*.d tools/*.o wyowm wyoctl
+	rm -f src/*.o src/*.d tools/*.o tools/*.d wyowm wyoctl
 eoc
