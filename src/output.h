@@ -6,6 +6,7 @@
 #include <wlr/types/wlr_output_layout.h>
 #include <wlr/types/wlr_scene.h>
 #include "layout.h"
+#include "animation.h"
 
 struct Server;
 struct wlr_buffer;
@@ -36,6 +37,8 @@ typedef struct Output {
 
     struct wlr_scene_buffer *wallpaper;
     struct wlr_buffer *wallpaper_buffer;
+    struct wlr_scene_buffer *wallpaper_fade;
+    AnimatedValue wallpaper_fade_anim;
 } Output;
 
 Output *output_create(struct Server *server, struct wlr_output *wlr_output);

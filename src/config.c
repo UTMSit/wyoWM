@@ -251,6 +251,8 @@ static void parse_general_line(Config *config, const char *key, const char *valu
         snprintf(config->kb_model, sizeof(config->kb_model), "%s", value);
     } else if (!strcasecmp(key, "kb_rules") || !strcasecmp(key, "keyboard_rules")) {
         snprintf(config->kb_rules, sizeof(config->kb_rules), "%s", value);
+    } else if (!strcasecmp(key, "sticky")) {
+        snprintf(config->sticky_apps, sizeof(config->sticky_apps), "%s", value);
     }
 }
 

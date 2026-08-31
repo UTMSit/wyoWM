@@ -192,7 +192,7 @@ void workspace_hide(Workspace *ws) {
     View *view;
 
     wl_list_for_each(view, &server->views, link) {
-        if (view->workspace == ws && view->output == out && view->mapped) {
+        if (view->workspace == ws && view->output == out && view->mapped && !view->sticky) {
             WorkspaceView *wv = calloc(1, sizeof(WorkspaceView));
             if (wv) {
                 wv->view = view;

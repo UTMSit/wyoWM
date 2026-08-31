@@ -27,6 +27,20 @@ static void handle_frame(struct wl_listener *listener, void *data) {
         }
     }
 
+    if (output->wallpaper_fade_anim.active) {
+        animation_update(&output->wallpaper_fade_anim, now);
+        if (output->wallpaper_fade) {
+            wlr_scene_buffer_set_opacity(output->wallpaper_fade, (float)output->wallpaper_fade_anim.current);
+        }
+        if (animation_finished(&output->wallpaper_fade_anim)) {
+            if (output->wallpaper_fade) {
+                wlr_scene_node_destroy(&output->wallpaper_fade->node);
+                output->wallpaper_fade = NULL;
+            }
+        }
+        active = true;
+    }
+
     wlr_scene_output_commit(output->scene_output, NULL);
 
     struct timespec ts;
@@ -138,6 +152,8 @@ Output *output_create(Server *server, struct wlr_output *wlr_output) {
         ws = workspace_find(server, 1);
     }
     output->active_workspace = ws;
+    output->wallpaper_fade = NULL;
+    animation_init(&output->wallpaper_fade_anim, 0.0);
     if (ws) {
         ws->output = output;
         ws->active = true;
@@ -230,6 +246,10 @@ void output_destroy(Output *output) {
 
     dwindle_destroy(&output->layout);
 
+    if (output->wallpaper_fade) {
+        wlr_scene_node_destroy(&output->wallpaper_fade->node);
+        output->wallpaper_fade = NULL;
+    }
 
     if (output->wallpaper) {
         wlr_scene_node_destroy(&output->wallpaper->node);

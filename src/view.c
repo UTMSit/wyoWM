@@ -6,6 +6,8 @@
 #include <math.h>
 #include <wlr/util/box.h>
 #include <wlr/util/edges.h>
+#include <ctype.h>
+#include <string.h>
 
 #define VIEW_ANIMATION_DURATION_MS 160
 
@@ -18,6 +20,7 @@ static void handle_request_move(struct wl_listener *listener, void *data);
 static void handle_request_resize(struct wl_listener *listener, void *data);
 static void handle_new_popup(struct wl_listener *listener, void *data);
 static void handle_scene_node_destroy(struct wl_listener *listener, void *data);
+static void check_sticky(View *view);
 
 typedef void (*scene_node_corner_radius_fn)(struct wlr_scene_node *node, float radius);
 typedef void (*scene_buffer_corner_radius_fn)(struct wlr_scene_buffer *buffer, float radius);
@@ -206,10 +209,12 @@ static void handle_set_title(struct wl_listener *listener, void *data) {
     (void)data;
     view_foreign_sync_meta(view);
 }
+
 static void handle_set_app_id(struct wl_listener *listener, void *data) {
     View *view = wl_container_of(listener, view, set_app_id);
     (void)data;
     view_foreign_sync_meta(view);
+    check_sticky(view);
 }
 
 static void handle_scene_node_destroy(struct wl_listener *listener, void *data) {
@@ -431,7 +436,7 @@ static void view_update_xdg_tiled_state(View *view) {
 	wlr_xdg_toplevel_set_tiled(view->xdg.toplevel, edges);
 }
 
-static void view_update_border(View *view, bool focused) {
+static void view_update_border(View *view) {
     if (!view) return;
 
     if (view->mapped) {
@@ -463,6 +468,7 @@ static void view_update_border(View *view, bool focused) {
     view_schedule_frame(view);
 
     if (!enabled) return;
+
     int w = view->width;
     int h = view->height;
     if (view->type == VIEW_TYPE_XDG && view->xdg.xdg_surface) {
@@ -488,33 +494,26 @@ static void view_update_border(View *view, bool focused) {
 
     if (view->border[0]) {
         wlr_scene_rect_set_size(view->border[0], horizontal_width, border_width);
-        wlr_scene_node_set_position(&view->border[0]->node,
-            -border_width + radius,
-            -border_width);
+        wlr_scene_node_set_position(&view->border[0]->node, -border_width + radius, -border_width);
     }
-
     if (view->border[1]) {
         wlr_scene_rect_set_size(view->border[1], horizontal_width, border_width);
-        wlr_scene_node_set_position(&view->border[1]->node,
-            -border_width + radius,
-            h);
+        wlr_scene_node_set_position(&view->border[1]->node, -border_width + radius, h);
     }
-
     if (view->border[2]) {
         wlr_scene_rect_set_size(view->border[2], border_width, vertical_height);
-        wlr_scene_node_set_position(&view->border[2]->node,
-            -border_width,
-            radius);
+        wlr_scene_node_set_position(&view->border[2]->node, -border_width, radius);
     }
-
     if (view->border[3]) {
         wlr_scene_rect_set_size(view->border[3], border_width, vertical_height);
-        wlr_scene_node_set_position(&view->border[3]->node,
-            w,
-            radius);
+        wlr_scene_node_set_position(&view->border[3]->node, w, radius);
     }
 
-    const float *color = focused ? focused_color : unfocused_color;
+    float t = (float)clamp01(view->border_blend.current);
+    float color[4];
+    for (int c = 0; c < 4; c++) {
+        color[c] = unfocused_color[c] + (focused_color[c] - unfocused_color[c]) * t;
+    }
 
     for (int i = 0; i < 4; i++) {
         if (view->border[i]) {
@@ -527,7 +526,12 @@ void view_refresh_decorations(View *view) {
     if (!view) return;
 
     bool focused = view->server && view->server->focused_view == view;
-    view_update_border(view, focused);
+    double target = focused ? 1.0 : 0.0;
+    if (view->border_blend.target != target && !view->border_blend.active) {
+        animation_set_target(&view->border_blend, target, 0, EASING_LINEAR);
+    }
+
+    view_update_border(view);
     view_apply_corner_radius(view, view->server ? view->server->config.corner_radius : 0.0);
 }
 
@@ -795,7 +799,6 @@ void view_set_geometry(View *view, int x, int y, int width, int height) {
         view->mapped &&
         !first &&
         (pos_changed || size_changed) &&
-        !view->fullscreen &&
         !view->dragging) {
         animate = true;
 
@@ -827,8 +830,7 @@ void view_set_geometry(View *view, int x, int y, int width, int height) {
         wlr_xdg_toplevel_set_size(view->xdg.toplevel, width, height);
     }
 
-    bool focused = view->server && view->server->focused_view == view;
-    view_update_border(view, focused);
+    view_update_border(view);
     view_foreign_sync(view);
 }
 
@@ -852,8 +854,11 @@ void view_focus(View *view) {
         wlr_xdg_toplevel_set_activated(view->xdg.toplevel, true);
     }
 
-    view_update_border(view, true);
+    int duration = (view->server && !view->server->shutting_down) ? view->server->config.animation_duration_ms : 0;
+    animation_set_target(&view->border_blend, 1.0, duration, EASING_EASE_OUT);
+    view_update_border(view);
     view_foreign_sync(view);
+
     if (view->output) {
         wlr_output_schedule_frame(view->output->wlr_output);
     }
@@ -866,8 +871,11 @@ void view_unfocus(View *view) {
         wlr_xdg_toplevel_set_activated(view->xdg.toplevel, false);
     }
 
-    view_update_border(view, false);
+    int duration = (view->server && !view->server->shutting_down) ? view->server->config.animation_duration_ms : 0;
+    animation_set_target(&view->border_blend, 0.0, duration, EASING_EASE_OUT);
+    view_update_border(view);
     view_foreign_sync(view);
+
     if (view->output) {
         wlr_output_schedule_frame(view->output->wlr_output);
     }
@@ -883,6 +891,44 @@ static void handle_toplevel_destroy(struct wl_listener *listener, void *data) {
     listener_remove(&view->set_title);
     listener_remove(&view->set_app_id);
     view->xdg.toplevel = NULL;
+}
+
+static bool app_id_in_sticky_list(const char *app_id, const char *sticky_apps) {
+    if (!app_id || !*app_id || !sticky_apps || !*sticky_apps) return false;
+    char *copy = strdup(sticky_apps);
+    if (!copy) return false;
+    bool found = false;
+    char *saveptr = NULL;
+    for (char *tok = strtok_r(copy, ",", &saveptr); tok; tok = strtok_r(NULL, ",", &saveptr)) {
+        while (*tok && isspace((unsigned char)*tok)) tok++;
+        char *end = tok + strlen(tok) - 1;
+        while (end > tok && isspace((unsigned char)*end)) *end-- = '\0';
+        if (*tok && strcasecmp(tok, app_id) == 0) {
+            found = true;
+            break;
+        }
+    }
+    free(copy);
+    return found;
+}
+
+static void check_sticky(View *view) {
+    if (!view || !view->server || view->sticky || view->server->shutting_down) return;
+    if (view->type != VIEW_TYPE_XDG || !view->xdg.toplevel) return;
+    const char *app_id = view->xdg.toplevel->app_id;
+    if (!app_id_in_sticky_list(app_id, view->server->config.sticky_apps)) return;
+
+    view->sticky = true;
+    view->floating = true;
+
+    if (view->workspace) {
+        workspace_remove_view(view->workspace, view);
+        view->workspace = NULL;
+    }
+    if (view->tiled && view->output) {
+        dwindle_remove_view(&view->output->layout, view);
+        view->tiled = false;
+    }
 }
 
 static void handle_map(struct wl_listener *listener, void *data) {
@@ -910,6 +956,7 @@ static void handle_map(struct wl_listener *listener, void *data) {
     view_foreign_create(view);
     view_foreign_sync(view);
     view_refresh_decorations(view);
+    check_sticky(view);
 }
 
 static void handle_unmap(struct wl_listener *listener, void *data) {
@@ -1112,7 +1159,7 @@ bool view_frame_update(View *view, int64_t now_ms) {
 
     if (view->border_blend.active) {
         animation_update(&view->border_blend, now_ms);
-        view_update_border(view, view->border_blend.target > 0.5);
+        view_update_border(view);
         active = true;
     }
 

@@ -64,6 +64,7 @@ typedef struct Config {
     char kb_layouts[256];
     char kb_variant[128];
     char kb_options[256];
+    char sticky_apps[1024];
 	struct wl_list keybinds;
 	struct wl_list exec_once;
 	bool has_keybinds;

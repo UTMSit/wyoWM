@@ -71,11 +71,8 @@ static void reload_config(Server *server) {
         }
     }
 
-    if (server->wallpaper_buffer) {
-        wlr_buffer_unlock(server->wallpaper_buffer);
-        server->wallpaper_buffer = NULL;
-    }
-
+    struct wlr_buffer *old_wallpaper = server->wallpaper_buffer;
+    server->wallpaper_buffer = NULL;
     server->wallpaper_width = 0;
     server->wallpaper_height = 0;
 
@@ -88,6 +85,36 @@ static void reload_config(Server *server) {
             &server->wallpaper_width,
             &server->wallpaper_height
         );
+    }
+
+    bool do_fade = old_wallpaper && server->wallpaper_buffer &&
+                   old_wallpaper != server->wallpaper_buffer;
+
+    if (do_fade) {
+        int fade_ms = server->config.animation_duration_ms;
+        if (fade_ms < 0) fade_ms = 0;
+        wl_list_for_each(output, &server->outputs, link) {
+            if (output->wallpaper_fade) {
+                wlr_scene_node_destroy(&output->wallpaper_fade->node);
+                output->wallpaper_fade = NULL;
+            }
+            output->wallpaper_fade = wlr_scene_buffer_create(server->scene_tree, old_wallpaper);
+            if (output->wallpaper_fade) {
+                wlr_scene_node_lower_to_bottom(&output->wallpaper_fade->node);
+                wlr_scene_node_set_position(&output->wallpaper_fade->node, output->x, output->y);
+                wlr_scene_buffer_set_dest_size(output->wallpaper_fade, output->width, output->height);
+                animation_init(&output->wallpaper_fade_anim, 1.0);
+                animation_set_target(&output->wallpaper_fade_anim, 0.0, fade_ms, EASING_EASE_OUT);
+                wlr_scene_buffer_set_opacity(output->wallpaper_fade, 1.0f);
+                if (output->wlr_output) {
+                    wlr_output_schedule_frame(output->wlr_output);
+                }
+            }
+        }
+    }
+
+    if (old_wallpaper) {
+        wlr_buffer_unlock(old_wallpaper);
     }
 
     View *view;
@@ -205,6 +232,37 @@ static void handle_new_toplevel(struct wl_listener *listener, void *data) {
 
 void server_view_mapped(Server *server, View *view) {
     if (!server || server->shutting_down || !view) return;
+
+    if (view->sticky) {
+        view->floating = true;
+        view->workspace = NULL;
+        if (!view->output) {
+            if (server->active_output) {
+                view->output = server->active_output;
+            }
+            if (!view->output && server->cursor) {
+                view->output = output_at(server, server->cursor->x, server->cursor->y);
+            }
+            if (!view->output && !wl_list_empty(&server->outputs)) {
+                Output *first = wl_container_of(server->outputs.next, first, link);
+                view->output = first;
+            }
+        }
+        if (view->output && view->width > 0 && view->height > 0) {
+            int rel_x = view->x - view->output->x;
+            int rel_y = view->y - view->output->y;
+            if (rel_x < 0 || rel_y < 0 || rel_x >= view->output->width || rel_y >= view->output->height) {
+                int x = (view->output->width - view->width) / 2;
+                int y = (view->output->height - view->height) / 2;
+                if (x < 0) x = 0;
+                if (y < 0) y = 0;
+                view_set_geometry(view, x, y, view->width, view->height);
+            }
+        }
+        server_focus_view(server, view);
+        server_arrange(server);
+        return;
+    }
 
     if (!view->workspace) {
         if (!view->output) {
