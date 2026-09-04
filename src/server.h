@@ -14,10 +14,12 @@
 #include <wlr/types/wlr_output_layout.h>
 #include <wlr/types/wlr_scene.h>
 #include <wlr/types/wlr_xdg_shell.h>
+#include <wlr/types/wlr_pointer_constraints_v1.h>
 #include <wlr/types/wlr_seat.h>
 #include <wlr/types/wlr_cursor.h>
 #include <wlr/types/wlr_xcursor_manager.h>
 #include <wlr/types/wlr_xdg_activation_v1.h>
+#include <wlr/types/wlr_relative_pointer_v1.h>
 #if __has_include(<wlr/types/wlr_xdg_output_v1.h>)
 #include <wlr/types/wlr_xdg_output_v1.h>
 #elif __has_include(<wlr/types/wlr_xdg_output_manager_v1.h>)
@@ -86,6 +88,7 @@ typedef struct Server {
     struct wlr_scene_tree *scene_tree;
     struct wlr_scene_tree *view_tree;
     struct wlr_scene_tree *layer_tree;
+    struct wlr_scene_tree *fullscreen_tree;
     struct wlr_scene_output_layout *scene_layout;
     struct wlr_scene_rect *background;
 
@@ -95,7 +98,10 @@ typedef struct Server {
     struct wlr_cursor *cursor;
     struct wlr_xcursor_manager *xcursor_manager;
     struct wlr_keyboard *active_keyboard;
-   	struct wlr_xdg_activation_v1 *xdg_activation;
+    struct wlr_xdg_activation_v1 *xdg_activation;
+    struct wlr_relative_pointer_manager_v1 *relative_pointer_manager;
+    struct wlr_pointer_constraints_v1 *pointer_constraints;
+    struct wl_listener new_constraint;
 	struct wl_listener xdg_activation_request_activate;
 
     struct wl_list outputs;
@@ -143,7 +149,10 @@ typedef struct Server {
 	struct wl_listener drag_destroy;
 	struct wlr_scene_tree *drag_icon_tree;
 	bool dnd_active;
+	bool cursor_hidden;
 	bool cursor_restore_pending;
+	struct wlr_pointer_constraint_v1 *active_constraint;
+	struct wl_listener constraint_destroy;
 	struct wlr_drag *dnd_drag;
 
     struct wlr_ext_workspace_manager_v1 *ext_workspace_manager;

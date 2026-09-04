@@ -19,6 +19,8 @@
 #include <wlr/types/wlr_pointer_gestures_v1.h>
 #include <wlr/types/wlr_screencopy_v1.h>
 #include <wlr/types/wlr_presentation_time.h>
+#include <wlr/types/wlr_pointer_constraints_v1.h>
+#include <wlr/types/wlr_text_input_v3.h>
 
 #ifndef SFD_NONBLOCK
 #define SFD_NONBLOCK O_NONBLOCK
@@ -410,6 +412,16 @@ void server_view_destroyed(Server *server, View *view) {
     ext_workspace_sync(server);
 }
 
+static void server_raise_floating(Server *server) {
+    if (!server || server->shutting_down) return;
+    View *view;
+    wl_list_for_each(view, &server->views, link) {
+        if (view->mapped && view->floating && !view->fullscreen && view->root_tree) {
+            wlr_scene_node_raise_to_top(&view->root_tree->node);
+        }
+    }
+}
+
 void server_focus_view(Server *server, View *view) {
     if (!server || server->shutting_down) return;
     if (view && (!view->mapped || !view->output)) {
@@ -454,6 +466,7 @@ void server_focus_view(Server *server, View *view) {
             wlr_seat_keyboard_notify_clear_focus(server->seat);
         }
     }
+    server_raise_floating(server);
     ipc_notify_workspaces(server);
     ext_workspace_sync(server);
 }
@@ -574,6 +587,64 @@ void server_arrange(Server *server) {
 
         dwindle_arrange(&output->layout, width, height);
     }
+    server_raise_floating(server);
+
+    wl_list_for_each(output, &server->outputs, link) {
+        if (output->wlr_output) {
+            wlr_output_schedule_frame(output->wlr_output);
+        }
+    }
+}
+
+static void handle_constraint_destroy(struct wl_listener *listener, void *data) {
+    Server *server = wl_container_of(listener, server, constraint_destroy);
+    struct wlr_pointer_constraint_v1 *constraint = data;
+    if (server->active_constraint == constraint) {
+        server->active_constraint = NULL;
+        server->cursor_hidden = false;
+        if (server->xcursor_manager) {
+            wlr_cursor_set_xcursor(server->cursor, server->xcursor_manager, "left_ptr");
+        }
+    }
+    wl_list_remove(&server->constraint_destroy.link);
+}
+
+static void handle_new_constraint(struct wl_listener *listener, void *data) {
+    Server *server = wl_container_of(listener, server, new_constraint);
+    struct wlr_pointer_constraint_v1 *constraint = data;
+    if (!constraint || !server->cursor) return;
+
+    if (server->active_constraint) {
+        wlr_pointer_constraint_v1_send_deactivated(server->active_constraint);
+    }
+
+    server->active_constraint = constraint;
+    constraint->data = server;
+    server->constraint_destroy.notify = handle_constraint_destroy;
+    wl_signal_add(&constraint->events.destroy, &server->constraint_destroy);
+
+    wlr_pointer_constraint_v1_send_activated(constraint);
+
+    if (constraint->type == WLR_POINTER_CONSTRAINT_V1_LOCKED) {
+        server->cursor_hidden = true;
+        wlr_cursor_unset_image(server->cursor);
+    }
+
+    if (constraint->type == WLR_POINTER_CONSTRAINT_V1_LOCKED) {
+        View *view = NULL;
+        struct wlr_surface *root = wlr_surface_get_root_surface(constraint->surface);
+        wl_list_for_each(view, &server->views, link) {
+            if (view->type == VIEW_TYPE_XDG && view->xdg.xdg_surface && view->xdg.xdg_surface->surface == root) {
+                break;
+            }
+            view = NULL;
+        }
+        if (view && view->output) {
+            double sx = view->width / 2.0;
+            double sy = view->height / 2.0;
+            wlr_cursor_warp(server->cursor, NULL, view->x + sx, view->y + sy);
+        }
+    }
 }
 
 bool server_init(Server *server) {
@@ -619,7 +690,13 @@ bool server_init(Server *server) {
 		wl_signal_add(&server->xdg_activation->events.request_activate,
 		              &server->xdg_activation_request_activate);
 	}
-    wlr_relative_pointer_manager_v1_create(server->display);
+	server->relative_pointer_manager = wlr_relative_pointer_manager_v1_create(server->display);
+    server->pointer_constraints = wlr_pointer_constraints_v1_create(server->display);
+    if (server->pointer_constraints) {
+        server->new_constraint.notify = handle_new_constraint;
+        wl_signal_add(&server->pointer_constraints->events.new_constraint, &server->new_constraint);
+    }
+    wlr_text_input_manager_v3_create(server->display);
     wlr_pointer_gestures_v1_create(server->display);
     wlr_screencopy_manager_v1_create(server->display);
 
@@ -647,7 +724,8 @@ bool server_init(Server *server) {
 
     server->view_tree = wlr_scene_tree_create(server->scene_tree);
     server->layer_tree = wlr_scene_tree_create(server->scene_tree);
-    if (!server->view_tree || !server->layer_tree) return false;
+    server->fullscreen_tree = wlr_scene_tree_create(server->scene_tree);
+    if (!server->view_tree || !server->layer_tree || !server->fullscreen_tree) return false;
 
     server->scene_layout = wlr_scene_attach_output_layout(server->scene, server->output_layout);
     if (!server->scene_layout) return false;

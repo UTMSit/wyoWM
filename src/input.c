@@ -781,6 +781,31 @@ static void handle_cursor_motion(struct wl_listener *listener, void *data) {
 
     wlr_cursor_move(server->cursor, &event->pointer->base, event->delta_x, event->delta_y);
 
+    if (server->cursor_hidden) return;
+
+    if (server->relative_pointer_manager && server->active_constraint) {
+        wlr_relative_pointer_manager_v1_send_relative_motion(
+            server->relative_pointer_manager, server->seat,
+            (uint64_t)event->time_msec * 1000,
+            event->delta_x, event->delta_y,
+            event->unaccel_dx, event->unaccel_dy
+        );
+    }
+
+    if (server->active_constraint && server->active_constraint->type == WLR_POINTER_CONSTRAINT_V1_LOCKED) {
+        View *view = NULL;
+        struct wlr_surface *root = wlr_surface_get_root_surface(server->active_constraint->surface);
+        wl_list_for_each(view, &server->views, link) {
+            if (view->type == VIEW_TYPE_XDG && view->xdg.xdg_surface && view->xdg.xdg_surface->surface == root) {
+                break;
+            }
+            view = NULL;
+        }
+        if (view && view->output) {
+            wlr_cursor_warp(server->cursor, NULL, view->x + view->width / 2.0, view->y + view->height / 2.0);
+        }
+    }
+
     if (server->drag_icon_tree) {
         wlr_scene_node_set_position(
             &server->drag_icon_tree->node,
@@ -814,6 +839,22 @@ static void handle_cursor_motion_absolute(struct wl_listener *listener, void *da
     if (server->shutting_down) return;
 
     wlr_cursor_warp_absolute(server->cursor, &event->pointer->base, event->x, event->y);
+
+    if (server->cursor_hidden) return;
+
+    if (server->active_constraint && server->active_constraint->type == WLR_POINTER_CONSTRAINT_V1_LOCKED) {
+        View *view = NULL;
+        struct wlr_surface *root = wlr_surface_get_root_surface(server->active_constraint->surface);
+        wl_list_for_each(view, &server->views, link) {
+            if (view->type == VIEW_TYPE_XDG && view->xdg.xdg_surface && view->xdg.xdg_surface->surface == root) {
+                break;
+            }
+            view = NULL;
+        }
+        if (view && view->output) {
+            wlr_cursor_warp(server->cursor, NULL, view->x + view->width / 2.0, view->y + view->height / 2.0);
+        }
+    }
 
     if (server->drag_icon_tree) {
         wlr_scene_node_set_position(
@@ -1234,7 +1275,7 @@ static Keyboard *keyboard_create(Server *server, struct wlr_input_device *device
     xkb_keymap_unref(keymap);
     xkb_context_unref(context);
 
-    wlr_keyboard_set_repeat_info(keyboard->wlr_keyboard, 25, 600);
+    wlr_keyboard_set_repeat_info(keyboard->wlr_keyboard, 25, 0);
 
     keyboard->key.notify = handle_key;
     wl_signal_add(&keyboard->wlr_keyboard->events.key, &keyboard->key);
@@ -1334,6 +1375,8 @@ void input_init(Server *server) {
 
     server->cursor = wlr_cursor_create();
     wlr_cursor_attach_output_layout(server->cursor, server->output_layout);
+
+    wlr_cursor_warp(server->cursor, NULL, 0, 0);
 
     server->xcursor_manager = wlr_xcursor_manager_create(NULL, 24);
     if (server->xcursor_manager) {

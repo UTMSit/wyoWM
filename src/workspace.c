@@ -217,6 +217,9 @@ void workspace_hide(Workspace *ws) {
     }
 
     ws->output = NULL;
+    if (wl_list_empty(&ws->views)) {
+        ws->last_output = NULL;
+    }
 }
 
 void workspace_show(Workspace *ws, Output *out) {

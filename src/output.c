@@ -94,6 +94,42 @@ Output *output_at(Server *server, double lx, double ly) {
     return NULL;
 }
 
+static bool output_try_state(struct wlr_output *wlr_output, struct wlr_output_mode *mode) {
+    struct wlr_output_state state;
+    wlr_output_state_init(&state);
+    wlr_output_state_set_enabled(&state, true);
+    if (mode) {
+        wlr_output_state_set_mode(&state, mode);
+    }
+    bool ok = wlr_output_commit_state(wlr_output, &state);
+    wlr_output_state_finish(&state);
+    return ok;
+}
+
+static bool output_commit_enabled(struct wlr_output *wlr_output) {
+    struct wlr_output_mode *preferred = wlr_output_preferred_mode(wlr_output);
+
+    if (preferred && output_try_state(wlr_output, preferred)) {
+        return true;
+    }
+
+    if (wlr_output->current_mode && output_try_state(wlr_output, wlr_output->current_mode)) {
+        return true;
+    }
+
+    struct wlr_output_mode *mode;
+    wl_list_for_each(mode, &wlr_output->modes, link) {
+        if (mode == preferred || mode == wlr_output->current_mode) {
+            continue;
+        }
+        if (output_try_state(wlr_output, mode)) {
+            return true;
+        }
+    }
+
+    return output_try_state(wlr_output, NULL);
+}
+
 Output *output_create(Server *server, struct wlr_output *wlr_output) {
     Output *output = calloc(1, sizeof(Output));
     if (!output) return NULL;
@@ -105,19 +141,10 @@ Output *output_create(Server *server, struct wlr_output *wlr_output) {
     dwindle_set_gaps(&output->layout, server->config.gaps_in, server->config.gaps_out);
 
     wlr_output_init_render(wlr_output, server->allocator, server->renderer);
-
-    struct wlr_output_mode *mode = wlr_output_preferred_mode(wlr_output);
-
-    struct wlr_output_state state;
-    wlr_output_state_init(&state);
-    wlr_output_state_set_enabled(&state, true);
-
-    if (mode) {
-        wlr_output_state_set_mode(&state, mode);
+    if (!output_commit_enabled(wlr_output)) {
+        free(output);
+        return NULL;
     }
-
-    wlr_output_commit_state(wlr_output, &state);
-    wlr_output_state_finish(&state);
 
     output->layout_output = wlr_output_layout_add_auto(server->output_layout, wlr_output);
     if (!output->layout_output) {

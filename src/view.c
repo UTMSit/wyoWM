@@ -1063,7 +1063,8 @@ void view_toggle_fullscreen(View *view) {
             view_set_geometry(view, view->saved_x, view->saved_y, width, height);
         }
 
-        if (view->root_tree) {
+        if (view->root_tree && view->server && view->server->view_tree) {
+            wlr_scene_node_reparent(&view->root_tree->node, view->server->view_tree);
             wlr_scene_node_raise_to_top(&view->root_tree->node);
         }
 
@@ -1088,9 +1089,10 @@ void view_toggle_fullscreen(View *view) {
 		wlr_xdg_toplevel_set_fullscreen(view->xdg.toplevel, true);
 	}
 
-    view_set_geometry(view, 0, 0, output->width, output->height);
+	view_set_geometry(view, 0, 0, output->width, output->height);
 
-    if (view->root_tree) {
+    if (view->root_tree && server->fullscreen_tree) {
+        wlr_scene_node_reparent(&view->root_tree->node, server->fullscreen_tree);
         wlr_scene_node_raise_to_top(&view->root_tree->node);
     }
 

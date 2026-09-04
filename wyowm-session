@@ -22,13 +22,5 @@ if [ -z "$DBUS_SESSION_BUS_ADDRESS" ]; then
     eval $(dbus-launch --sh-syntax)
     export DBUS_SESSION_BUS_ADDRESS
 fi
-pkill -x pipewire
-pkill -x pipewire-pulse
-pkill -x wireplumber
-pkill -f xdg-desktop-portal
-i=0
-while [ "$i" -lt 25 ] && pgrep -x pipewire >/dev/null 2>&1; do
-sleep 0.1
-i=$((i + 1))
-done
+
 exec /usr/local/bin/wyowm >/tmp/wyowm.log 2>&1
