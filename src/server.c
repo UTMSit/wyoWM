@@ -639,22 +639,29 @@ void server_arrange(Server *server) {
 }
 
 static void handle_constraint_destroy(struct wl_listener *listener, void *data) {
-    Server *server = wl_container_of(listener, server, constraint_destroy);
-    struct wlr_pointer_constraint_v1 *constraint = data;
-    if (server->active_constraint == constraint) {
-        server->active_constraint = NULL;
-        server->cursor_hidden = false;
-        if (server->xcursor_manager) {
-            wlr_cursor_set_xcursor(server->cursor, server->xcursor_manager, "left_ptr");
-        }
-    }
+	Server *server = wl_container_of(listener, server, constraint_destroy);
+	struct wlr_pointer_constraint_v1 *constraint = data;
+
+	fprintf(stderr, "wyowm: constraint destroy\n");
+	if (server->active_constraint == constraint) {
+		server->active_constraint = NULL;
+		server->cursor_hidden = false;
+		server->client_cursor_hidden = false;
+		server->client_cursor_hidden_time = 0;
+		if (server->xcursor_manager) {
+			wlr_cursor_set_xcursor(server->cursor, server->xcursor_manager, "left_ptr");
+		}
+	}
     wl_list_remove(&server->constraint_destroy.link);
 }
 
 static void handle_new_constraint(struct wl_listener *listener, void *data) {
-    Server *server = wl_container_of(listener, server, new_constraint);
-    struct wlr_pointer_constraint_v1 *constraint = data;
-    if (!constraint || !server->cursor) return;
+	Server *server = wl_container_of(listener, server, new_constraint);
+	struct wlr_pointer_constraint_v1 *constraint = data;
+
+	if (!constraint || !server->cursor) return;
+
+	fprintf(stderr, "wyowm: constraint type=%d\n", constraint->type);
 
     if (server->active_constraint) {
         wlr_pointer_constraint_v1_send_deactivated(server->active_constraint);
@@ -668,9 +675,12 @@ static void handle_new_constraint(struct wl_listener *listener, void *data) {
     wlr_pointer_constraint_v1_send_activated(constraint);
 
     if (constraint->type == WLR_POINTER_CONSTRAINT_V1_LOCKED) {
-        server->cursor_hidden = true;
-        wlr_cursor_unset_image(server->cursor);
-    }
+		server->cursor_hidden = true;
+		server->client_cursor_hidden = true;
+		wlr_cursor_set_surface(server->cursor, NULL, 0, 0);
+		wlr_cursor_unset_image(server->cursor);
+		wlr_cursor_set_xcursor(server->cursor, NULL, NULL);
+	}
 }
 
 bool server_init(Server *server) {

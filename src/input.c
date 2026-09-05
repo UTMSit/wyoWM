@@ -813,24 +813,33 @@ static void handle_request_start_drag(struct wl_listener *listener, void *data) 
 }
 
 static void handle_cursor_motion(struct wl_listener *listener, void *data) {
-    Server *server = wl_container_of(listener, server, cursor_motion);
-    struct wlr_pointer_motion_event *event = data;
-    if (server->shutting_down) return;
+	Server *server = wl_container_of(listener, server, cursor_motion);
+	struct wlr_pointer_motion_event *event = data;
 
-    wlr_cursor_move(server->cursor, &event->pointer->base, event->delta_x, event->delta_y);
+	if (server->shutting_down) return;
 
-	if (server->relative_pointer_manager && server->active_constraint) {
+	if (server->active_constraint && server->active_constraint->type == WLR_POINTER_CONSTRAINT_V1_LOCKED) {
+		if (server->relative_pointer_manager) {
+			wlr_relative_pointer_manager_v1_send_relative_motion(
+				server->relative_pointer_manager, server->seat,
+				(uint64_t)event->time_msec * 1000,
+				event->delta_x, event->delta_y,
+				event->unaccel_dx, event->unaccel_dy
+			);
+		}
+		wlr_seat_pointer_notify_frame(server->seat);
+		return;
+	}
+
+	wlr_cursor_move(server->cursor, &event->pointer->base, event->delta_x, event->delta_y);
+
+	if (server->relative_pointer_manager) {
 		wlr_relative_pointer_manager_v1_send_relative_motion(
 			server->relative_pointer_manager, server->seat,
 			(uint64_t)event->time_msec * 1000,
 			event->delta_x, event->delta_y,
 			event->unaccel_dx, event->unaccel_dy
 		);
-	}
-
-	if (server->active_constraint && server->active_constraint->type == WLR_POINTER_CONSTRAINT_V1_LOCKED) {
-		wlr_seat_pointer_notify_frame(server->seat);
-		return;
 	}
 
 	if (server->cursor_hidden) return;
@@ -875,16 +884,17 @@ static void handle_cursor_motion(struct wl_listener *listener, void *data) {
 }
 
 static void handle_cursor_motion_absolute(struct wl_listener *listener, void *data) {
-    Server *server = wl_container_of(listener, server, cursor_motion_absolute);
-    struct wlr_pointer_motion_absolute_event *event = data;
-    if (server->shutting_down) return;
+	Server *server = wl_container_of(listener, server, cursor_motion_absolute);
+	struct wlr_pointer_motion_absolute_event *event = data;
 
-    wlr_cursor_warp_absolute(server->cursor, &event->pointer->base, event->x, event->y);
+	if (server->shutting_down) return;
 
 	if (server->active_constraint && server->active_constraint->type == WLR_POINTER_CONSTRAINT_V1_LOCKED) {
 		wlr_seat_pointer_notify_frame(server->seat);
 		return;
 	}
+
+	wlr_cursor_warp_absolute(server->cursor, &event->pointer->base, event->x, event->y);
 
 	if (server->cursor_hidden) return;
 	cursor_try_restore(server, animation_now_ms());
@@ -958,6 +968,18 @@ static void handle_cursor_button(struct wl_listener *listener, void *data) {
 		wlr_seat_pointer_notify_frame(server->seat);
 		return;
 	}
+
+	if (server->active_constraint && server->active_constraint->type == WLR_POINTER_CONSTRAINT_V1_LOCKED) {
+		wlr_seat_pointer_notify_button(
+			server->seat,
+			event->time_msec,
+			event->button,
+			event->state
+		);
+		wlr_seat_pointer_notify_frame(server->seat);
+		return;
+	}
+
 	cursor_try_restore(server, animation_now_ms());
 
     uint32_t modifiers = 0;
@@ -1371,7 +1393,21 @@ static void handle_cursor_axis(struct wl_listener *listener, void *data) {
     Server *server = wl_container_of(listener, server, cursor_axis);
     struct wlr_pointer_axis_event *event = data;
     if (server->shutting_down) return;
-    if (server->drag.active || server->dnd_active) return;
+	if (server->drag.active || server->dnd_active) return;
+
+	if (server->active_constraint && server->active_constraint->type == WLR_POINTER_CONSTRAINT_V1_LOCKED) {
+		wlr_seat_pointer_notify_axis(
+			server->seat,
+			event->time_msec,
+			event->orientation,
+			event->delta,
+			event->delta_discrete,
+			event->source,
+			event->relative_direction
+		);
+		wlr_seat_pointer_notify_frame(server->seat);
+		return;
+	}
 
     if (server->drag_icon_tree) {
         wlr_scene_node_set_position(
@@ -1408,8 +1444,12 @@ static void handle_request_set_cursor(struct wl_listener *listener, void *data) 
 		return;
 	}
 
+	if (server->active_constraint && server->active_constraint->type == WLR_POINTER_CONSTRAINT_V1_LOCKED) {
+		return;
+	}
+
 	if (event->surface) {
-	bool hidden = wlr_surface_get_texture(event->surface) == NULL;
+		bool hidden = wlr_surface_get_texture(event->surface) == NULL;
 
 		wlr_cursor_set_surface(
 			server->cursor,
