@@ -20,6 +20,7 @@
 #include <wlr/types/wlr_screencopy_v1.h>
 #include <wlr/types/wlr_presentation_time.h>
 #include <wlr/types/wlr_pointer_constraints_v1.h>
+#include <wlr/types/wlr_cursor_shape_v1.h>
 #include <wlr/types/wlr_text_input_v3.h>
 
 #ifndef SFD_NONBLOCK
@@ -124,6 +125,7 @@ static void reload_config(Server *server) {
         view_refresh_decorations(view);
     }
     input_reload_keymaps(server);
+    input_reload_cursor(server);
     server_arrange(server);
 }
 
@@ -215,6 +217,30 @@ static void handle_new_xdg_decoration(struct wl_listener *listener, void *data) 
         wlr_xdg_toplevel_decoration_v1_set_mode(decoration, WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
         view->decoration_mode_set = true;
     }
+}
+
+static void handle_request_set_cursor_shape(struct wl_listener *listener, void *data) {
+	Server *server = wl_container_of(listener, server, request_set_cursor_shape);
+	struct wlr_cursor_shape_manager_v1_request_set_shape_event *event = data;
+
+	if (!server || !server->seat || !server->cursor || !event) {
+		return;
+	}
+
+	if (server->drag.active || server->dnd_active) {
+		return;
+	}
+
+	if (event->seat_client != server->seat->pointer_state.focused_client) {
+		return;
+	}
+
+	if (server->xcursor_manager) {
+		const char *name = wlr_cursor_shape_v1_name(event->shape);
+		if (name && name[0]) {
+			wlr_cursor_set_xcursor(server->cursor, server->xcursor_manager, name);
+		}
+	}
 }
 
 static void handle_new_output(struct wl_listener *listener, void *data) {
@@ -700,12 +726,14 @@ bool server_init(Server *server) {
     wlr_pointer_gestures_v1_create(server->display);
     wlr_screencopy_manager_v1_create(server->display);
 
-    typedef void *(*wyo_versioned_global_fn)(struct wl_display *display, uint32_t version);
+   	server->cursor_shape_manager = wlr_cursor_shape_manager_v1_create(server->display, 1);
+	if (server->cursor_shape_manager) {
+		server->request_set_cursor_shape.notify = handle_request_set_cursor_shape;
+		wl_signal_add(&server->cursor_shape_manager->events.request_set_shape, &server->request_set_cursor_shape);
+	}
 
-    wyo_versioned_global_fn create_cursor_shape = (wyo_versioned_global_fn)dlsym(RTLD_DEFAULT, "wlr_cursor_shape_manager_v1_create");
-    if (create_cursor_shape) create_cursor_shape(server->display, 1);
-
-    wyo_versioned_global_fn create_frac_scale = (wyo_versioned_global_fn)dlsym(RTLD_DEFAULT, "wlr_fractional_scale_manager_v1_create");
+	typedef void *(*wyo_versioned_global_fn)(struct wl_display *display, uint32_t version);
+	wyo_versioned_global_fn create_frac_scale = (wyo_versioned_global_fn)dlsym(RTLD_DEFAULT, "wlr_fractional_scale_manager_v1_create");
     if (create_frac_scale) create_frac_scale(server->display, 1);
 
     server->output_layout = wlr_output_layout_create(server->display);
@@ -1020,9 +1048,8 @@ void server_destroy(Server *server) {
         server->reload_fd = -1;
     }
 
-   	if (!wl_list_empty(&server->new_xdg_decoration.link)) {
-		wl_list_remove(&server->new_xdg_decoration.link);
-	}
+  	listener_remove(&server->new_xdg_decoration);
+	listener_remove(&server->request_set_cursor_shape);
 
     config_destroy(&server->config);
 

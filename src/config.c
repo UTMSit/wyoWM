@@ -253,6 +253,13 @@ static void parse_general_line(Config *config, const char *key, const char *valu
         snprintf(config->kb_rules, sizeof(config->kb_rules), "%s", value);
     } else if (!strcasecmp(key, "sticky")) {
         snprintf(config->sticky_apps, sizeof(config->sticky_apps), "%s", value);
+    } else if (!strcasecmp(key, "cursor_theme")) {
+        snprintf(config->cursor_theme, sizeof(config->cursor_theme), "%s", value);
+    } else if (!strcasecmp(key, "cursor_size")) {
+        int size = atoi(value);
+        if (size < 1) size = 1;
+        if (size > 256) size = 256;
+        config->cursor_size = size;
     }
 }
 
@@ -414,6 +421,8 @@ void config_init_defaults(Config *config) {
     config->animation_duration_ms = 190;
     config->wallpaper_mode = WALLPAPER_MODE_FILL;
     config->has_keybinds = false;
+    snprintf(config->cursor_theme, sizeof(config->cursor_theme), "default");
+    config->cursor_size = 24;
 
     config->border_color_focused[0] = 0.4f;
     config->border_color_focused[1] = 0.6f;

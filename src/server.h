@@ -2,6 +2,7 @@
 #define SERVER_H
 
 #include <stdbool.h>
+#include <stdint.h>
 #include <wayland-server.h>
 #include <wlr/backend.h>
 #include <wlr/backend/session.h>
@@ -151,7 +152,11 @@ typedef struct Server {
 	bool dnd_active;
 	bool cursor_hidden;
 	bool cursor_restore_pending;
+	bool client_cursor_hidden;
+	int64_t client_cursor_hidden_time;
 	struct wlr_pointer_constraint_v1 *active_constraint;
+	struct wlr_cursor_shape_manager_v1 *cursor_shape_manager;
+	struct wl_listener request_set_cursor_shape;
 	struct wl_listener constraint_destroy;
 	struct wlr_drag *dnd_drag;
 

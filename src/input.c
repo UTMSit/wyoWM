@@ -524,6 +524,43 @@ static bool surface_is_popup(Server *server, struct wlr_surface *surface) {
     return false;
 }
 
+static void cursor_show_default(Server *server) {
+	if (!server || !server->cursor) {
+		return;
+	}
+
+	server->client_cursor_hidden = false;
+	server->client_cursor_hidden_time = 0;
+
+	if (server->xcursor_manager) {
+		wlr_cursor_set_xcursor(server->cursor, server->xcursor_manager, "left_ptr");
+	}
+}
+
+static bool cursor_restore_allowed(Server *server) {
+	if (!server || !server->client_cursor_hidden) {
+		return false;
+	}
+
+	if (server->cursor_hidden || server->active_constraint) {
+		return false;
+	}
+
+	return true;
+}
+
+static void cursor_try_restore(Server *server, int64_t now) {
+	if (!cursor_restore_allowed(server)) {
+		return;
+	}
+
+	if (server->client_cursor_hidden_time > 0 && now - server->client_cursor_hidden_time < 0) {
+		return;
+	}
+
+	cursor_show_default(server);
+}
+
 static void process_cursor(Server *server, uint64_t time_msec) {
     if (server->shutting_down) return;
 
@@ -779,9 +816,9 @@ static void handle_cursor_motion(struct wl_listener *listener, void *data) {
     struct wlr_pointer_motion_event *event = data;
     if (server->shutting_down) return;
 
-    wlr_cursor_move(server->cursor, &event->pointer->base, event->delta_x, event->delta_y);
-
-    if (server->cursor_hidden) return;
+   	wlr_cursor_move(server->cursor, &event->pointer->base, event->delta_x, event->delta_y);
+	if (server->cursor_hidden) return;
+	cursor_try_restore(server, animation_now_ms());
 
     if (server->relative_pointer_manager && server->active_constraint) {
         wlr_relative_pointer_manager_v1_send_relative_motion(
@@ -827,10 +864,21 @@ static void handle_cursor_motion(struct wl_listener *listener, void *data) {
     }
 
     if (server->drag.active) {
-        process_drag(server);
-    } else {
-        process_cursor(server, event->time_msec);
-    }
+		process_drag(server);
+	} else if (server->dnd_active) {
+		double sx = 0.0;
+		double sy = 0.0;
+		struct wlr_surface *surface = surface_at_cursor(server, &sx, &sy);
+		if (surface) {
+			wlr_seat_pointer_notify_enter(server->seat, surface, sx, sy);
+			wlr_seat_pointer_notify_motion(server->seat, event->time_msec, sx, sy);
+		} else {
+			wlr_seat_pointer_clear_focus(server->seat);
+		}
+		wlr_seat_pointer_notify_frame(server->seat);
+	} else {
+		process_cursor(server, event->time_msec);
+	}
 }
 
 static void handle_cursor_motion_absolute(struct wl_listener *listener, void *data) {
@@ -838,9 +886,9 @@ static void handle_cursor_motion_absolute(struct wl_listener *listener, void *da
     struct wlr_pointer_motion_absolute_event *event = data;
     if (server->shutting_down) return;
 
-    wlr_cursor_warp_absolute(server->cursor, &event->pointer->base, event->x, event->y);
-
-    if (server->cursor_hidden) return;
+   	wlr_cursor_warp_absolute(server->cursor, &event->pointer->base, event->x, event->y);
+	if (server->cursor_hidden) return;
+	cursor_try_restore(server, animation_now_ms());
 
     if (server->active_constraint && server->active_constraint->type == WLR_POINTER_CONSTRAINT_V1_LOCKED) {
         View *view = NULL;
@@ -877,10 +925,21 @@ static void handle_cursor_motion_absolute(struct wl_listener *listener, void *da
     }
 
     if (server->drag.active) {
-        process_drag(server);
-    } else {
-        process_cursor(server, event->time_msec);
-    }
+		process_drag(server);
+	} else if (server->dnd_active) {
+		double sx = 0.0;
+		double sy = 0.0;
+		struct wlr_surface *surface = surface_at_cursor(server, &sx, &sy);
+		if (surface) {
+			wlr_seat_pointer_notify_enter(server->seat, surface, sx, sy);
+			wlr_seat_pointer_notify_motion(server->seat, event->time_msec, sx, sy);
+		} else {
+			wlr_seat_pointer_clear_focus(server->seat);
+		}
+		wlr_seat_pointer_notify_frame(server->seat);
+	} else {
+		process_cursor(server, event->time_msec);
+	}
 }
 
 static bool surface_allows_keyboard(Server *server, struct wlr_surface *surface) {
@@ -899,9 +958,22 @@ static bool surface_allows_keyboard(Server *server, struct wlr_surface *surface)
 }
 
 static void handle_cursor_button(struct wl_listener *listener, void *data) {
-    Server *server = wl_container_of(listener, server, cursor_button);
-    struct wlr_pointer_button_event *event = data;
-    if (server->shutting_down) return;
+	Server *server = wl_container_of(listener, server, cursor_button);
+	struct wlr_pointer_button_event *event = data;
+
+	if (server->shutting_down) return;
+
+	if (server->dnd_active) {
+		wlr_seat_pointer_notify_button(
+			server->seat,
+			event->time_msec,
+			event->button,
+			event->state
+		);
+		wlr_seat_pointer_notify_frame(server->seat);
+		return;
+	}
+	cursor_try_restore(server, animation_now_ms());
 
     uint32_t modifiers = 0;
     if (server->active_keyboard) {
@@ -1275,7 +1347,7 @@ static Keyboard *keyboard_create(Server *server, struct wlr_input_device *device
     xkb_keymap_unref(keymap);
     xkb_context_unref(context);
 
-    wlr_keyboard_set_repeat_info(keyboard->wlr_keyboard, 25, 0);
+    wlr_keyboard_set_repeat_info(keyboard->wlr_keyboard, 25, 600);
 
     keyboard->key.notify = handle_key;
     wl_signal_add(&keyboard->wlr_keyboard->events.key, &keyboard->key);
@@ -1314,7 +1386,7 @@ static void handle_cursor_axis(struct wl_listener *listener, void *data) {
     Server *server = wl_container_of(listener, server, cursor_axis);
     struct wlr_pointer_axis_event *event = data;
     if (server->shutting_down) return;
-    if (server->drag.active) return;
+    if (server->drag.active || server->dnd_active) return;
 
     if (server->drag_icon_tree) {
         wlr_scene_node_set_position(
@@ -1340,34 +1412,70 @@ static void handle_cursor_axis(struct wl_listener *listener, void *data) {
 }
 
 static void handle_request_set_cursor(struct wl_listener *listener, void *data) {
-    Server *server = wl_container_of(listener, server, request_set_cursor);
-    struct wlr_seat_pointer_request_set_cursor_event *event = data;
+	Server *server = wl_container_of(listener, server, request_set_cursor);
+	struct wlr_seat_pointer_request_set_cursor_event *event = data;
 
-    if (!server || !server->seat || !server->cursor || !event) {
-        return;
-    }
+	if (!server || !server->seat || !server->cursor || !event) {
+		return;
+	}
 
-    if (event->seat_client != server->seat->pointer_state.focused_client) {
-        return;
-    }
+	if (event->seat_client != server->seat->pointer_state.focused_client) {
+		return;
+	}
 
-    if (event->surface) {
-        wlr_cursor_set_surface(
-            server->cursor,
-            event->surface,
-            event->hotspot_x,
-            event->hotspot_y
-        );
+	if (event->surface) {
+	bool hidden = wlr_surface_get_texture(event->surface) == NULL;
+
+		wlr_cursor_set_surface(
+			server->cursor,
+			event->surface,
+			event->hotspot_x,
+			event->hotspot_y
+		);
+
+		server->client_cursor_hidden = hidden;
+
+		if (hidden) {
+			server->client_cursor_hidden_time = animation_now_ms();
+		} else {
+			server->client_cursor_hidden_time = 0;
+		}
+
+		return;
+	}
+
+	cursor_show_default(server);
+}
+
+void input_reload_cursor(Server *server) {
+    if (!server || !server->cursor) {
         return;
     }
 
     if (server->xcursor_manager) {
-        wlr_cursor_set_xcursor(
-            server->cursor,
-            server->xcursor_manager,
-            "left_ptr"
-        );
+        wlr_cursor_unset_image(server->cursor);
+        wlr_xcursor_manager_destroy(server->xcursor_manager);
+        server->xcursor_manager = NULL;
     }
+
+    const char *theme = server->config.cursor_theme[0] ? server->config.cursor_theme : NULL;
+    uint32_t size = server->config.cursor_size > 0 ? (uint32_t)server->config.cursor_size : 24;
+
+    server->xcursor_manager = wlr_xcursor_manager_create(theme, size);
+    if (!server->xcursor_manager) {
+        return;
+    }
+
+    wlr_xcursor_manager_load(server->xcursor_manager, 1.0f);
+
+    Output *output;
+    wl_list_for_each(output, &server->outputs, link) {
+        if (output->wlr_output && output->wlr_output->scale > 0.0f) {
+            wlr_xcursor_manager_load(server->xcursor_manager, output->wlr_output->scale);
+        }
+    }
+
+    wlr_cursor_set_xcursor(server->cursor, server->xcursor_manager, "left_ptr");
 }
 
 void input_init(Server *server) {
@@ -1378,11 +1486,7 @@ void input_init(Server *server) {
 
     wlr_cursor_warp(server->cursor, NULL, 0, 0);
 
-    server->xcursor_manager = wlr_xcursor_manager_create(NULL, 24);
-    if (server->xcursor_manager) {
-        wlr_xcursor_manager_load(server->xcursor_manager, 1.0f);
-        wlr_cursor_set_xcursor(server->cursor, server->xcursor_manager, "left_ptr");
-    }
+    input_reload_cursor(server);
 
     server->cursor_motion.notify = handle_cursor_motion;
     wl_signal_add(&server->cursor->events.motion, &server->cursor_motion);

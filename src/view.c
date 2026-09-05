@@ -16,6 +16,7 @@ static void handle_unmap(struct wl_listener *listener, void *data);
 static void handle_destroy(struct wl_listener *listener, void *data);
 static void handle_commit(struct wl_listener *listener, void *data);
 static void handle_toplevel_destroy(struct wl_listener *listener, void *data);
+static void handle_request_fullscreen(struct wl_listener *listener, void *data);
 static void handle_request_move(struct wl_listener *listener, void *data);
 static void handle_request_resize(struct wl_listener *listener, void *data);
 static void handle_new_popup(struct wl_listener *listener, void *data);
@@ -230,6 +231,26 @@ static void handle_destroy(struct wl_listener *listener, void *data) {
     (void)data;
 
     view_destroy(view);
+}
+static void handle_request_fullscreen(struct wl_listener *listener, void *data) {
+	View *view = wl_container_of(listener, view, xdg.request_fullscreen);
+	(void)data;
+
+	if (!view || !view->server || view->server->shutting_down) {
+		return;
+	}
+
+	if (!view->mapped || !view->xdg.toplevel || !view->xdg.xdg_surface || !view->xdg.xdg_surface->initialized) {
+		return;
+	}
+
+	bool requested = view->xdg.toplevel->requested.fullscreen;
+
+	if (requested && !view->fullscreen) {
+		view_toggle_fullscreen(view);
+	} else if (!requested && view->fullscreen) {
+		view_toggle_fullscreen(view);
+	}
 }
 
 static void handle_request_move(struct wl_listener *listener, void *data) {
@@ -584,7 +605,8 @@ View *view_create_xdg(Server *server, struct wlr_xdg_surface *xdg_surface, struc
     wl_list_init(&view->xdg.destroy.link);
     wl_list_init(&view->xdg.commit.link);
     wl_list_init(&view->xdg.toplevel_destroy.link);
-    wl_list_init(&view->xdg.request_move.link);
+	wl_list_init(&view->xdg.request_fullscreen.link);
+	wl_list_init(&view->xdg.request_move.link);
     wl_list_init(&view->xdg.request_resize.link);
     wl_list_init(&view->xdg.new_popup.link);
     wl_list_init(&view->set_title.link);
@@ -606,7 +628,10 @@ View *view_create_xdg(Server *server, struct wlr_xdg_surface *xdg_surface, struc
     wl_signal_add(&xdg_surface->surface->events.commit, &view->xdg.commit);
 
     view->xdg.toplevel_destroy.notify = handle_toplevel_destroy;
-    wl_signal_add(&toplevel->events.destroy, &view->xdg.toplevel_destroy);
+	wl_signal_add(&toplevel->events.destroy, &view->xdg.toplevel_destroy);
+	view->xdg.request_fullscreen.notify = handle_request_fullscreen;
+	wl_signal_add(&toplevel->events.request_fullscreen, &view->xdg.request_fullscreen);
+	view->xdg.request_move.notify = handle_request_move;
 
     view->xdg.request_move.notify = handle_request_move;
     wl_signal_add(&toplevel->events.request_move, &view->xdg.request_move);
@@ -655,7 +680,8 @@ void view_destroy(View *view) {
         listener_remove(&view->xdg.destroy);
         listener_remove(&view->xdg.commit);
         listener_remove(&view->xdg.toplevel_destroy);
-        listener_remove(&view->xdg.request_move);
+		listener_remove(&view->xdg.request_fullscreen);
+		listener_remove(&view->xdg.request_move);
         listener_remove(&view->xdg.request_resize);
         listener_remove(&view->xdg.new_popup);
         listener_remove(&view->set_title);
@@ -885,9 +911,10 @@ static void handle_toplevel_destroy(struct wl_listener *listener, void *data) {
     View *view = wl_container_of(listener, view, xdg.toplevel_destroy);
     (void)data;
     if (!view->xdg.listeners_initialized) return;
-    listener_remove(&view->xdg.request_move);
-    listener_remove(&view->xdg.request_resize);
-    listener_remove(&view->xdg.toplevel_destroy);
+    listener_remove(&view->xdg.request_fullscreen);
+	listener_remove(&view->xdg.request_move);
+	listener_remove(&view->xdg.request_resize);
+	listener_remove(&view->xdg.toplevel_destroy);
     listener_remove(&view->set_title);
     listener_remove(&view->set_app_id);
     view->xdg.toplevel = NULL;
@@ -953,7 +980,12 @@ static void handle_map(struct wl_listener *listener, void *data) {
     }
 
     server_view_mapped(view->server, view);
-    view_foreign_create(view);
+
+	if (view->xdg.toplevel && view->xdg.toplevel->requested.fullscreen && !view->fullscreen) {
+		view_toggle_fullscreen(view);
+	}
+
+	view_foreign_create(view);
     view_foreign_sync(view);
     view_refresh_decorations(view);
     check_sticky(view);
