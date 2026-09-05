@@ -219,6 +219,21 @@ static void handle_new_xdg_decoration(struct wl_listener *listener, void *data) 
     }
 }
 
+static const char *cursor_shape_fallback(const char *name) {
+	if (!name || !*name) return "left_ptr";
+
+	if (strcmp(name, "crosshair") == 0) return "crosshair";
+	if (strcmp(name, "sb_v_double_arrow") == 0) return "ns-resize";
+	if (strcmp(name, "sb_h_double_arrow") == 0) return "ew-resize";
+	if (strcmp(name, "fleur") == 0) return "move";
+	if (strcmp(name, "hand1") == 0 || strcmp(name, "hand2") == 0) return "pointer";
+	if (strcmp(name, "xterm") == 0 || strcmp(name, "ibeam") == 0) return "text";
+	if (strcmp(name, "watch") == 0 || strcmp(name, "wait") == 0) return "wait";
+	if (strcmp(name, "pirate") == 0) return "not-allowed";
+
+	return name;
+}
+
 static void handle_request_set_cursor_shape(struct wl_listener *listener, void *data) {
 	Server *server = wl_container_of(listener, server, request_set_cursor_shape);
 	struct wlr_cursor_shape_manager_v1_request_set_shape_event *event = data;
@@ -237,8 +252,9 @@ static void handle_request_set_cursor_shape(struct wl_listener *listener, void *
 
 	if (server->xcursor_manager) {
 		const char *name = wlr_cursor_shape_v1_name(event->shape);
-		if (name && name[0]) {
-			wlr_cursor_set_xcursor(server->cursor, server->xcursor_manager, name);
+		const char *fallback_name = cursor_shape_fallback(name);
+		if (fallback_name && fallback_name[0]) {
+			wlr_cursor_set_xcursor(server->cursor, server->xcursor_manager, fallback_name);
 		}
 	}
 }
@@ -654,22 +670,6 @@ static void handle_new_constraint(struct wl_listener *listener, void *data) {
     if (constraint->type == WLR_POINTER_CONSTRAINT_V1_LOCKED) {
         server->cursor_hidden = true;
         wlr_cursor_unset_image(server->cursor);
-    }
-
-    if (constraint->type == WLR_POINTER_CONSTRAINT_V1_LOCKED) {
-        View *view = NULL;
-        struct wlr_surface *root = wlr_surface_get_root_surface(constraint->surface);
-        wl_list_for_each(view, &server->views, link) {
-            if (view->type == VIEW_TYPE_XDG && view->xdg.xdg_surface && view->xdg.xdg_surface->surface == root) {
-                break;
-            }
-            view = NULL;
-        }
-        if (view && view->output) {
-            double sx = view->width / 2.0;
-            double sy = view->height / 2.0;
-            wlr_cursor_warp(server->cursor, NULL, view->x + sx, view->y + sy);
-        }
     }
 }
 
