@@ -129,79 +129,70 @@ bool wallpaper_load_file(
 }
 
 void wallpaper_configure_output(Output *output) {
-    if (!output) return;
-    Server *server = output->server;
-
-    if (!server->wallpaper_buffer || server->wallpaper_width <= 0 || server->wallpaper_height <= 0) {
-        if (output->wallpaper) {
-            wlr_scene_node_destroy(&output->wallpaper->node);
-            output->wallpaper = NULL;
-            output->wallpaper_buffer = NULL;
-        }
-        return;
-    }
-
-    if (output->wallpaper && output->wallpaper_buffer != server->wallpaper_buffer) {
-        wlr_scene_node_destroy(&output->wallpaper->node);
-        output->wallpaper = NULL;
-        output->wallpaper_buffer = NULL;
-    }
-
-    if (!output->wallpaper) {
-        output->wallpaper = wlr_scene_buffer_create(server->scene_tree, server->wallpaper_buffer);
-        if (!output->wallpaper) return;
-        output->wallpaper_buffer = server->wallpaper_buffer;
-        wlr_scene_node_lower_to_bottom(&output->wallpaper->node);
-    }
-
-    int tex_w = server->wallpaper_width;
-    int tex_h = server->wallpaper_height;
-    int out_w = output->width;
-    int out_h = output->height;
-    if (out_w <= 0 || out_h <= 0) return;
-
-    WallpaperMode mode = server->config.wallpaper_mode;
-    if (mode == WALLPAPER_MODE_TILE) mode = WALLPAPER_MODE_FILL;
-
-    if (mode == WALLPAPER_MODE_STRETCH) {
-        wlr_scene_node_set_position(&output->wallpaper->node, output->x, output->y);
-        wlr_scene_buffer_set_source_box(output->wallpaper, NULL);
-        wlr_scene_buffer_set_dest_size(output->wallpaper, out_w, out_h);
-        return;
-    }
-
-    if (mode == WALLPAPER_MODE_FILL) {
-        double scale_x = (double)out_w / (double)tex_w;
-        double scale_y = (double)out_h / (double)tex_h;
-        double scale = scale_x > scale_y ? scale_x : scale_y;
-        double src_w = (double)out_w / scale;
-        double src_h = (double)out_h / scale;
-        double src_x = ((double)tex_w - src_w) / 2.0;
-        double src_y = ((double)tex_h - src_h) / 2.0;
-        struct wlr_fbox box = { .x = src_x, .y = src_y, .width = src_w, .height = src_h };
-        wlr_scene_node_set_position(&output->wallpaper->node, output->x, output->y);
-        wlr_scene_buffer_set_source_box(output->wallpaper, &box);
-        wlr_scene_buffer_set_dest_size(output->wallpaper, out_w, out_h);
-        return;
-    }
-
-    if (mode == WALLPAPER_MODE_FIT) {
-        double scale_x = (double)out_w / (double)tex_w;
-        double scale_y = (double)out_h / (double)tex_h;
-        double scale = scale_x < scale_y ? scale_x : scale_y;
-        int dest_w = (int)((double)tex_w * scale);
-        int dest_h = (int)((double)tex_h * scale);
-        int x = output->x + (out_w - dest_w) / 2;
-        int y = output->y + (out_h - dest_h) / 2;
-        wlr_scene_node_set_position(&output->wallpaper->node, x, y);
-        wlr_scene_buffer_set_source_box(output->wallpaper, NULL);
-        wlr_scene_buffer_set_dest_size(output->wallpaper, dest_w, dest_h);
-        return;
-    }
-
-    int x = output->x + (out_w - tex_w) / 2;
-    int y = output->y + (out_h - tex_h) / 2;
-    wlr_scene_node_set_position(&output->wallpaper->node, x, y);
-    wlr_scene_buffer_set_source_box(output->wallpaper, NULL);
-    wlr_scene_buffer_set_dest_size(output->wallpaper, tex_w, tex_h);
+	if (!output) return;
+	Server *server = output->server;
+	if (!server->wallpaper_buffer || server->wallpaper_width <= 0 || server->wallpaper_height <= 0) {
+		if (output->wallpaper) {
+			wlr_scene_node_destroy(&output->wallpaper->node);
+			output->wallpaper = NULL;
+			output->wallpaper_buffer = NULL;
+		}
+		return;
+	}
+	if (output->wallpaper && output->wallpaper_buffer != server->wallpaper_buffer) {
+		wlr_scene_node_destroy(&output->wallpaper->node);
+		output->wallpaper = NULL;
+		output->wallpaper_buffer = NULL;
+	}
+	if (!output->wallpaper) {
+		output->wallpaper = wlr_scene_buffer_create(server->scene_tree, server->wallpaper_buffer);
+		if (!output->wallpaper) return;
+		output->wallpaper_buffer = server->wallpaper_buffer;
+		wlr_scene_node_lower_to_bottom(&output->wallpaper->node);
+	}
+	int tex_w = server->wallpaper_width;
+	int tex_h = server->wallpaper_height;
+	int out_w = output->width;
+	int out_h = output->height;
+	if (out_w <= 0 || out_h <= 0) return;
+	WallpaperMode mode = server->config.wallpaper_mode;
+	if (mode == WALLPAPER_MODE_TILE) mode = WALLPAPER_MODE_FILL;
+	if (mode == WALLPAPER_MODE_STRETCH) {
+		wlr_scene_node_set_position(&output->wallpaper->node, output->x, output->y);
+		wlr_scene_buffer_set_source_box(output->wallpaper, NULL);
+		wlr_scene_buffer_set_dest_size(output->wallpaper, out_w, out_h);
+		return;
+	}
+	if (mode == WALLPAPER_MODE_FILL) {
+		double scale_x = (double)out_w / (double)tex_w;
+		double scale_y = (double)out_h / (double)tex_h;
+		double scale = scale_x > scale_y ? scale_x : scale_y;
+		double src_w = (double)out_w / scale;
+		double src_h = (double)out_h / scale;
+		double src_x = ((double)tex_w - src_w) / 2.0;
+		double src_y = ((double)tex_h - src_h) / 2.0;
+		struct wlr_fbox box = { .x = src_x, .y = src_y, .width = src_w, .height = src_h };
+		wlr_scene_node_set_position(&output->wallpaper->node, output->x, output->y);
+		wlr_scene_buffer_set_source_box(output->wallpaper, &box);
+		wlr_scene_buffer_set_dest_size(output->wallpaper, out_w, out_h);
+		return;
+	}
+	if (mode == WALLPAPER_MODE_FIT) {
+		double scale_x = (double)out_w / (double)tex_w;
+		double scale_y = (double)out_h / (double)tex_h;
+		double scale = scale_x < scale_y ? scale_x : scale_y;
+		int dest_w = (int)((double)tex_w * scale);
+		int dest_h = (int)((double)tex_h * scale);
+		int x = output->x + (out_w - dest_w) / 2;
+		int y = output->y + (out_h - dest_h) / 2;
+		wlr_scene_node_set_position(&output->wallpaper->node, x, y);
+		wlr_scene_buffer_set_source_box(output->wallpaper, NULL);
+		wlr_scene_buffer_set_dest_size(output->wallpaper, dest_w, dest_h);
+		return;
+	}
+	int x = output->x + (out_w - tex_w) / 2;
+	int y = output->y + (out_h - tex_h) / 2;
+	wlr_scene_node_set_position(&output->wallpaper->node, x, y);
+	wlr_scene_buffer_set_source_box(output->wallpaper, NULL);
+	wlr_scene_buffer_set_dest_size(output->wallpaper, tex_w, tex_h);
 }

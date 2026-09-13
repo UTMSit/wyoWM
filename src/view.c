@@ -117,15 +117,18 @@ static void handle_foreign_destroy(struct wl_listener *listener, void *data) {
     listener_remove(&view->foreign_destroy);
 }
 static void view_foreign_sync_meta(View *view) {
-    if (!view->foreign_handle || !view->xdg.toplevel) return;
-    wlr_foreign_toplevel_handle_v1_set_title(
-        view->foreign_handle,
-        view->xdg.toplevel->title ? view->xdg.toplevel->title : ""
-    );
-    wlr_foreign_toplevel_handle_v1_set_app_id(
-        view->foreign_handle,
-        view->xdg.toplevel->app_id ? view->xdg.toplevel->app_id : ""
-    );
+	if (!view->foreign_handle || !view->xdg.toplevel) return;
+
+	char safe_title[2048];
+	char safe_app_id[2048];
+
+	snprintf(safe_title, sizeof(safe_title), "%s",
+		view->xdg.toplevel->title ? view->xdg.toplevel->title : "");
+	snprintf(safe_app_id, sizeof(safe_app_id), "%s",
+		view->xdg.toplevel->app_id ? view->xdg.toplevel->app_id : "");
+
+	wlr_foreign_toplevel_handle_v1_set_title(view->foreign_handle, safe_title);
+	wlr_foreign_toplevel_handle_v1_set_app_id(view->foreign_handle, safe_app_id);
 }
 static void view_foreign_create(View *view) {
     Server *server = view->server;
@@ -437,13 +440,14 @@ static const float fallback_border_focused[4] = { 0.4f, 0.6f, 1.0f, 1.0f };
 static const float fallback_border_unfocused[4] = { 0.3f, 0.3f, 0.35f, 1.0f };
 
 static void view_apply_geometry(View *view) {
-    if (!view) return;
-
-    if (view->root_tree) {
-        int x = (int)lround(view->anim_x.current);
-        int y = (int)lround(view->anim_y.current);
-        wlr_scene_node_set_position(&view->root_tree->node, x, y);
-    }
+	if (!view || !view->root_tree) return;
+	int x = (int)lround(view->anim_x.current);
+	int y = (int)lround(view->anim_y.current);
+	int old_x = view->root_tree->node.x;
+	int old_y = view->root_tree->node.y;
+	if (x != old_x || y != old_y) {
+		wlr_scene_node_set_position(&view->root_tree->node, x, y);
+	}
 }
 
 static void view_update_xdg_tiled_state(View *view) {
@@ -458,89 +462,80 @@ static void view_update_xdg_tiled_state(View *view) {
 }
 
 static void view_update_border(View *view) {
-    if (!view) return;
-
-    if (view->mapped) {
-        view_update_xdg_tiled_state(view);
-    }
-
-    int border_width = 2;
-    const float *focused_color = fallback_border_focused;
-    const float *unfocused_color = fallback_border_unfocused;
-
-    if (view->server) {
-        border_width = view->server->config.border_width;
-        focused_color = view->server->config.border_color_focused;
-        unfocused_color = view->server->config.border_color_unfocused;
-    }
-
-    bool enabled = border_width > 0 &&
-                   view->mapped &&
-                   !view->fullscreen &&
-                   view->width > 0 &&
-                   view->height > 0;
-
-    for (int i = 0; i < 4; i++) {
-        if (view->border[i]) {
-            wlr_scene_node_set_enabled(&view->border[i]->node, enabled);
-        }
-    }
-
-    view_schedule_frame(view);
-
-    if (!enabled) return;
-
-    int w = view->width;
-    int h = view->height;
-    if (view->type == VIEW_TYPE_XDG && view->xdg.xdg_surface) {
-        struct wlr_box geo = view->xdg.xdg_surface->current.geometry;
-        if (geo.width > 0 && geo.height > 0) {
-            w = geo.width;
-            h = geo.height;
-        }
-    }
-
-    int radius = 0;
-    if (view->server && corner_radius_supported()) {
-        radius = (int)lround(view->server->config.corner_radius);
-    }
-    if (radius < 0) radius = 0;
-    if (radius > w / 2) radius = w / 2;
-    if (radius > h / 2) radius = h / 2;
-
-    int horizontal_width = w + border_width * 2 - radius * 2;
-    int vertical_height = h - radius * 2;
-    if (horizontal_width < 0) horizontal_width = 0;
-    if (vertical_height < 0) vertical_height = 0;
-
-    if (view->border[0]) {
-        wlr_scene_rect_set_size(view->border[0], horizontal_width, border_width);
-        wlr_scene_node_set_position(&view->border[0]->node, -border_width + radius, -border_width);
-    }
-    if (view->border[1]) {
-        wlr_scene_rect_set_size(view->border[1], horizontal_width, border_width);
-        wlr_scene_node_set_position(&view->border[1]->node, -border_width + radius, h);
-    }
-    if (view->border[2]) {
-        wlr_scene_rect_set_size(view->border[2], border_width, vertical_height);
-        wlr_scene_node_set_position(&view->border[2]->node, -border_width, radius);
-    }
-    if (view->border[3]) {
-        wlr_scene_rect_set_size(view->border[3], border_width, vertical_height);
-        wlr_scene_node_set_position(&view->border[3]->node, w, radius);
-    }
-
-    float t = (float)clamp01(view->border_blend.current);
-    float color[4];
-    for (int c = 0; c < 4; c++) {
-        color[c] = unfocused_color[c] + (focused_color[c] - unfocused_color[c]) * t;
-    }
-
-    for (int i = 0; i < 4; i++) {
-        if (view->border[i]) {
-            wlr_scene_rect_set_color(view->border[i], color);
-        }
-    }
+	if (!view) return;
+	if (view->mapped) {
+		view_update_xdg_tiled_state(view);
+	}
+	int border_width = 2;
+	const float *focused_color = fallback_border_focused;
+	const float *unfocused_color = fallback_border_unfocused;
+	if (view->server) {
+		border_width = view->server->config.border_width;
+		focused_color = view->server->config.border_color_focused;
+		unfocused_color = view->server->config.border_color_unfocused;
+	}
+	bool enabled = border_width > 0 &&
+		view->mapped &&
+		!view->fullscreen &&
+		view->width > 0 &&
+		view->height > 0;
+	bool enabled_changed = false;
+	for (int i = 0; i < 4; i++) {
+		if (view->border[i] && view->border[i]->node.enabled != enabled) {
+			wlr_scene_node_set_enabled(&view->border[i]->node, enabled);
+			enabled_changed = true;
+		}
+	}
+	if (!enabled) return;
+	int w = view->width;
+	int h = view->height;
+	if (view->type == VIEW_TYPE_XDG && view->xdg.xdg_surface) {
+		struct wlr_box geo = view->xdg.xdg_surface->current.geometry;
+		if (geo.width > 0 && geo.height > 0) {
+			w = geo.width;
+			h = geo.height;
+		}
+	}
+	int radius = 0;
+	if (view->server && corner_radius_supported()) {
+		radius = (int)lround(view->server->config.corner_radius);
+	}
+	if (radius < 0) radius = 0;
+	if (radius > w / 2) radius = w / 2;
+	if (radius > h / 2) radius = h / 2;
+	int horizontal_width = w + border_width * 2 - radius * 2;
+	int vertical_height = h - radius * 2;
+	if (horizontal_width < 0) horizontal_width = 0;
+	if (vertical_height < 0) vertical_height = 0;
+	if (view->border[0]) {
+		wlr_scene_rect_set_size(view->border[0], horizontal_width, border_width);
+		wlr_scene_node_set_position(&view->border[0]->node, -border_width + radius, -border_width);
+	}
+	if (view->border[1]) {
+		wlr_scene_rect_set_size(view->border[1], horizontal_width, border_width);
+		wlr_scene_node_set_position(&view->border[1]->node, -border_width + radius, h);
+	}
+	if (view->border[2]) {
+		wlr_scene_rect_set_size(view->border[2], border_width, vertical_height);
+		wlr_scene_node_set_position(&view->border[2]->node, -border_width, radius);
+	}
+	if (view->border[3]) {
+		wlr_scene_rect_set_size(view->border[3], border_width, vertical_height);
+		wlr_scene_node_set_position(&view->border[3]->node, w, radius);
+	}
+	float t = (float)clamp01(view->border_blend.current);
+	float color[4];
+	for (int c = 0; c < 4; c++) {
+		color[c] = unfocused_color[c] + (focused_color[c] - unfocused_color[c]) * t;
+	}
+	for (int i = 0; i < 4; i++) {
+		if (view->border[i]) {
+			wlr_scene_rect_set_color(view->border[i], color);
+		}
+	}
+	if (enabled_changed) {
+		view_schedule_frame(view);
+	}
 }
 
 void view_refresh_decorations(View *view) {
@@ -680,8 +675,8 @@ void view_destroy(View *view) {
         listener_remove(&view->xdg.destroy);
         listener_remove(&view->xdg.commit);
         listener_remove(&view->xdg.toplevel_destroy);
-		listener_remove(&view->xdg.request_fullscreen);
-		listener_remove(&view->xdg.request_move);
+        listener_remove(&view->xdg.request_fullscreen);
+        listener_remove(&view->xdg.request_move);
         listener_remove(&view->xdg.request_resize);
         listener_remove(&view->xdg.new_popup);
         listener_remove(&view->set_title);
@@ -940,22 +935,18 @@ static bool app_id_in_sticky_list(const char *app_id, const char *sticky_apps) {
 }
 
 static void check_sticky(View *view) {
-    if (!view || !view->server || view->sticky || view->server->shutting_down) return;
-    if (view->type != VIEW_TYPE_XDG || !view->xdg.toplevel) return;
-    const char *app_id = view->xdg.toplevel->app_id;
-    if (!app_id_in_sticky_list(app_id, view->server->config.sticky_apps)) return;
+	if (!view || !view->server || view->sticky || view->server->shutting_down) return;
+	if (view->type != VIEW_TYPE_XDG || !view->xdg.toplevel) return;
+	const char *app_id = view->xdg.toplevel->app_id;
+	if (!app_id_in_sticky_list(app_id, view->server->config.sticky_apps)) return;
 
-    view->sticky = true;
-    view->floating = true;
+	view->sticky = true;
+	view->floating = true;
 
-    if (view->workspace) {
-        workspace_remove_view(view->workspace, view);
-        view->workspace = NULL;
-    }
-    if (view->tiled && view->output) {
-        dwindle_remove_view(&view->output->layout, view);
-        view->tiled = false;
-    }
+	if (view->workspace) {
+		workspace_remove_view(view->workspace, view);
+		view->workspace = NULL;
+	}
 }
 
 static void handle_map(struct wl_listener *listener, void *data) {
@@ -1065,94 +1056,90 @@ void view_close(View *view) {
 }
 
 void view_toggle_fullscreen(View *view) {
-    if (!view || !view->server || view->server->shutting_down) return;
-    if (!view->output) return;
+	if (!view || !view->server || view->server->shutting_down) return;
+	if (!view->output) return;
 
-    Output *output = view->output;
-    Server *server = view->server;
+	Output *output = view->output;
+	Server *server = view->server;
 
-   	if (view->fullscreen) {
+	if (view->fullscreen) {
 		view->fullscreen = false;
 		if (view->type == VIEW_TYPE_XDG && view->xdg.toplevel && view->xdg.xdg_surface && view->xdg.xdg_surface->initialized) {
 			wlr_xdg_toplevel_set_fullscreen(view->xdg.toplevel, false);
 		}
 
-        if (view->saved_tiled) {
-            view->saved_tiled = false;
+		if (view->saved_tiled) {
+			view->saved_tiled = false;
+			if (!view->tiled && view->workspace) {
+				dwindle_add_view(&view->workspace->layout, view);
+				view->tiled = true;
+				server_arrange(server);
+			}
+		} else {
+			int width = view->saved_width > 0 ? view->saved_width : view->width;
+			int height = view->saved_height > 0 ? view->saved_height : view->height;
+			if (width <= 0) width = 800;
+			if (height <= 0) height = 600;
+			view_set_geometry(view, view->saved_x, view->saved_y, width, height);
+		}
 
-            if (!view->tiled) {
-                dwindle_add_view(&output->layout, view);
-                view->tiled = true;
-                server_arrange(server);
-            }
-        } else {
-            int width = view->saved_width > 0 ? view->saved_width : view->width;
-            int height = view->saved_height > 0 ? view->saved_height : view->height;
+		if (view->root_tree && view->server && view->server->view_tree) {
+			wlr_scene_node_reparent(&view->root_tree->node, view->server->view_tree);
+			wlr_scene_node_raise_to_top(&view->root_tree->node);
+		}
+		return;
+	}
 
-            if (width <= 0) width = 800;
-            if (height <= 0) height = 600;
+	if (!view->mapped) return;
 
-            view_set_geometry(view, view->saved_x, view->saved_y, width, height);
-        }
+	view->saved_x = view->x - output->x;
+	view->saved_y = view->y - output->y;
+	view->saved_width = view->width;
+	view->saved_height = view->height;
+	view->saved_tiled = view->tiled;
 
-        if (view->root_tree && view->server && view->server->view_tree) {
-            wlr_scene_node_reparent(&view->root_tree->node, view->server->view_tree);
-            wlr_scene_node_raise_to_top(&view->root_tree->node);
-        }
+	if (view->tiled && view->workspace) {
+		dwindle_remove_view(&view->workspace->layout, view);
+		view->tiled = false;
+	}
 
-        return;
-    }
-
-    if (!view->mapped) return;
-
-    view->saved_x = view->x - output->x;
-    view->saved_y = view->y - output->y;
-    view->saved_width = view->width;
-    view->saved_height = view->height;
-    view->saved_tiled = view->tiled;
-
-    if (view->tiled) {
-        dwindle_remove_view(&output->layout, view);
-        view->tiled = false;
-    }
-
-    view->fullscreen = true;
+	view->fullscreen = true;
 	if (view->type == VIEW_TYPE_XDG && view->xdg.toplevel && view->xdg.xdg_surface && view->xdg.xdg_surface->initialized) {
 		wlr_xdg_toplevel_set_fullscreen(view->xdg.toplevel, true);
 	}
 
 	view_set_geometry(view, 0, 0, output->width, output->height);
 
-    if (view->root_tree && server->fullscreen_tree) {
-        wlr_scene_node_reparent(&view->root_tree->node, server->fullscreen_tree);
-        wlr_scene_node_raise_to_top(&view->root_tree->node);
-    }
+	if (view->root_tree && server->fullscreen_tree) {
+		wlr_scene_node_reparent(&view->root_tree->node, server->fullscreen_tree);
+		wlr_scene_node_raise_to_top(&view->root_tree->node);
+	}
 
-    server_arrange(server);
+	server_arrange(server);
 }
 
 void view_center(View *view) {
-    if (!view || !view->server || view->server->shutting_down) return;
-    if (!view->output || view->fullscreen) return;
+	if (!view || !view->server || view->server->shutting_down) return;
+	if (!view->output || view->fullscreen) return;
 
-    Output *output = view->output;
+	Output *output = view->output;
 
-    if (view->tiled) {
-        dwindle_remove_view(&output->layout, view);
-        view->tiled = false;
-        view->floating = true;
-    }
+	if (view->tiled && view->workspace) {
+		dwindle_remove_view(&view->workspace->layout, view);
+		view->tiled = false;
+		view->floating = true;
+	}
 
-    int width = view->width > 0 ? view->width : 800;
-    int height = view->height > 0 ? view->height : 600;
+	int width = view->width > 0 ? view->width : 800;
+	int height = view->height > 0 ? view->height : 600;
 
-    int x = (output->width - width) / 2;
-    int y = (output->height - height) / 2;
+	int x = (output->width - width) / 2;
+	int y = (output->height - height) / 2;
 
-    if (x < 0) x = 0;
-    if (y < 0) y = 0;
+	if (x < 0) x = 0;
+	if (y < 0) y = 0;
 
-    view_set_geometry(view, x, y, width, height);
+	view_set_geometry(view, x, y, width, height);
 }
 
 void view_move_by(View *view, int dx, int dy) {

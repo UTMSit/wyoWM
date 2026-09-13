@@ -128,65 +128,54 @@ static Output *find_output_in_direction(Server *server, Output *current, int dir
 }
 
 static void focus_output_direction(Server *server, int dir) {
-    Output *current = server->active_output;
-
-    if (!current && server->focused_view) {
-        current = server->focused_view->output;
-    }
-
-    if (!current && !wl_list_empty(&server->outputs)) {
-        current = wl_container_of(server->outputs.next, current, link);
-    }
-
-    if (!current) return;
-
-    Output *target = find_output_in_direction(server, current, dir);
-    if (!target) return;
-
-    View *view = dwindle_focused_view(&target->layout);
-    if (!view) view = dwindle_first_view(&target->layout);
-
-    if (view) {
-        server_focus_view(server, view);
-        return;
-    }
-
-    server->active_output = target;
-
-    if (server->cursor) {
-        wlr_cursor_warp(
-            server->cursor,
-            NULL,
-            target->x + target->width / 2,
-            target->y + target->height / 2
-        );
-    }
-
-    server_focus_view(server, NULL);
-    wlr_seat_pointer_clear_focus(server->seat);
-    wlr_seat_keyboard_notify_clear_focus(server->seat);
+	Output *current = server->active_output;
+	if (!current && server->focused_view) {
+		current = server->focused_view->output;
+	}
+	if (!current && !wl_list_empty(&server->outputs)) {
+		current = wl_container_of(server->outputs.next, current, link);
+	}
+	if (!current) return;
+	Output *target = find_output_in_direction(server, current, dir);
+	if (!target) return;
+	View *view = NULL;
+	if (target->active_workspace) {
+		view = dwindle_focused_view(&target->active_workspace->layout);
+		if (!view) view = dwindle_first_view(&target->active_workspace->layout);
+	}
+	if (view) {
+		server_focus_view(server, view);
+		return;
+	}
+	server->active_output = target;
+	if (server->cursor) {
+		wlr_cursor_warp(
+			server->cursor,
+			NULL,
+			target->x + target->width / 2,
+			target->y + target->height / 2
+		);
+	}
+	server_focus_view(server, NULL);
+	wlr_seat_pointer_clear_focus(server->seat);
+	wlr_seat_keyboard_notify_clear_focus(server->seat);
 }
 
 static void focus_direction(Server *server, int dir) {
-    int dx = 0;
-    int dy = 0;
-    direction_to_delta(dir, &dx, &dy);
-
-    View *current = server->focused_view;
-
-    if (current && current->output && !current->floating && !current->fullscreen) {
-        DwindleLayout *layout = &current->output->layout;
-
-        dwindle_move_focus(layout, dx, dy);
-
-        View *next = dwindle_focused_view(layout);
-        if (next && next != current) {
-            server_focus_view(server, next);
-            return;
-        }
-    }
-
-    focus_output_direction(server, dir);
+	int dx = 0;
+	int dy = 0;
+	direction_to_delta(dir, &dx, &dy);
+	View *current = server->focused_view;
+	if (current && current->output && current->workspace && !current->floating && !current->fullscreen) {
+		DwindleLayout *layout = &current->workspace->layout;
+		dwindle_move_focus(layout, dx, dy);
+		View *next = dwindle_focused_view(layout);
+		if (next && next != current) {
+			server_focus_view(server, next);
+			return;
+		}
+	}
+	focus_output_direction(server, dir);
 }
 
 static void move_view_to_output_direction(Server *server, int dir) {
@@ -223,10 +212,10 @@ static void move_view_to_output_direction(Server *server, int dir) {
         return;
     }
 
-    if (view->tiled && source) {
-        dwindle_remove_view(&source->layout, view);
-        view->tiled = false;
-    }
+    if (view->tiled && source && source->active_workspace) {
+		dwindle_remove_view(&source->active_workspace->layout, view);
+		view->tiled = false;
+	}
 
     view->output = target;
 
@@ -238,10 +227,10 @@ static void move_view_to_output_direction(Server *server, int dir) {
         if (x < 0) x = 0;
         if (y < 0) y = 0;
         view_set_geometry(view, x, y, width, height);
-    } else {
-        dwindle_add_view(&target->layout, view);
-        view->tiled = true;
-    }
+    } else if (target->active_workspace) {
+		dwindle_add_view(&target->active_workspace->layout, view);
+		view->tiled = true;
+	}
 
     server_focus_view(server, view);
     server_arrange(server);
@@ -260,11 +249,10 @@ static void move_view_in_direction(Server *server, int dir) {
         return;
     }
 
-    if (view->tiled && view->output) {
-        dwindle_focus(&view->output->layout, view);
-
-        if (dwindle_move_view(&view->output->layout, dx, dy)) {
-            View *moved = dwindle_focused_view(&view->output->layout);
+   	if (view->tiled && view->workspace) {
+		dwindle_focus(&view->workspace->layout, view);
+		if (dwindle_move_view(&view->workspace->layout, dx, dy)) {
+			View *moved = dwindle_focused_view(&view->workspace->layout);
             if (moved) {
                 server_focus_view(server, moved);
             }
@@ -287,8 +275,8 @@ static void resize_view_in_direction(Server *server, int dir) {
     dx *= 40;
     dy *= 40;
 
-    if (view->tiled && view->output) {
-        dwindle_resize(&view->output->layout, dx, dy);
+    if (view->tiled && view->workspace) {
+		dwindle_resize(&view->workspace->layout, dx, dy);
         wlr_output_schedule_frame(view->output->wlr_output);
         return;
     }
@@ -368,10 +356,10 @@ static bool handle_keybind_action(Server *server, const ConfigKeybind *bind) {
 
         if (!view->output) return true;
 
-        if (view->tiled) {
-            dwindle_remove_view(&view->output->layout, view);
-            view->tiled = false;
-            view->floating = true;
+        if (view->tiled && view->workspace) {
+			dwindle_remove_view(&view->workspace->layout, view);
+			view->tiled = false;
+			view->floating = true;
 
             if (view->width >= view->output->width - 16 &&
                 view->height >= view->output->height - 16) {
@@ -387,16 +375,13 @@ static bool handle_keybind_action(Server *server, const ConfigKeybind *bind) {
                 view_set_geometry(view, x, y, width, height);
             }
         } else if (view->floating) {
-            view->floating = false;
-
-            if (view->output && view->output->active_workspace) {
-                view->workspace = view->output->active_workspace;
-            }
-
-            dwindle_add_view(&view->output->layout, view);
-            view->tiled = true;
-            server_arrange(server);
-        }
+			view->floating = false;
+			if (view->workspace) {
+				dwindle_add_view(&view->workspace->layout, view);
+				view->tiled = true;
+				server_arrange(server);
+			}
+		}
 
         return true;
     }
@@ -693,11 +678,11 @@ static void process_drag(Server *server) {
 
         view_set_geometry(view, new_x, new_y, view->width, view->height);
     } else if (server->drag.resize) {
-        if (server->drag.tiled_resize && view->output) {
-            if (inc_dx != 0.0 || inc_dy != 0.0) {
-                dwindle_resize(&view->output->layout, (int)inc_dx, (int)inc_dy);
-                server_arrange(server);
-            }
+			if (server->drag.tiled_resize && view->workspace) {
+				if (inc_dx != 0.0 || inc_dy != 0.0) {
+					dwindle_resize(&view->workspace->layout, (int)inc_dx, (int)inc_dy);
+					server_arrange(server);
+				}
         } else {
             int offset_x = 0;
             int offset_y = 0;
@@ -1046,8 +1031,8 @@ static void handle_cursor_button(struct wl_listener *listener, void *data) {
                 server->drag.orig_height = view->height;
 
                 if (server->drag.move) {
-                    if (view->tiled && view->output) {
-                        dwindle_remove_view(&view->output->layout, view);
+                    if (view->tiled && view->workspace) {
+                        dwindle_remove_view(&view->workspace->layout, view);
                         view->tiled = false;
                         view->floating = true;
                         server->drag.restore_tiled = true;
@@ -1102,31 +1087,26 @@ static void handle_cursor_button(struct wl_listener *listener, void *data) {
                 }
             }
 
-            if (restore_tiled) {
-                Output *out = target ? target : view->output;
-                view->floating = false;
-
-                if (out) {
-                    view->output = out;
-
-                    if (!view->workspace && out->active_workspace) {
-                        view->workspace = out->active_workspace;
-                    }
-
-                    int rel_x = (int)server->cursor->x - out->x;
-                    int rel_y = (int)server->cursor->y - out->y;
-
-                    View *under = dwindle_view_at(&out->layout, rel_x, rel_y);
-
-                    if (under && under != view && under->tiled && !under->fullscreen) {
-                        dwindle_place_view(&out->layout, view, under, rel_x, rel_y);
-                        view->tiled = true;
-                    } else {
-                        dwindle_add_view(&out->layout, view);
-                        view->tiled = true;
-                    }
-                }
-            }
+         			if (restore_tiled) {
+				Output *out = target ? target : view->output;
+				view->floating = false;
+				if (out && out->active_workspace) {
+					view->output = out;
+					if (!view->workspace) {
+						view->workspace = out->active_workspace;
+					}
+					int rel_x = (int)server->cursor->x - out->x;
+					int rel_y = (int)server->cursor->y - out->y;
+					View *under = dwindle_view_at(&out->active_workspace->layout, rel_x, rel_y);
+					if (under && under != view && under->tiled && !under->fullscreen) {
+						dwindle_place_view(&out->active_workspace->layout, view, under, rel_x, rel_y);
+						view->tiled = true;
+					} else {
+						dwindle_add_view(&out->active_workspace->layout, view);
+						view->tiled = true;
+					}
+				}
+			}
         }
 
         if (view) {

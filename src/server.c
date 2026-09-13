@@ -22,6 +22,10 @@
 #include <wlr/types/wlr_pointer_constraints_v1.h>
 #include <wlr/types/wlr_cursor_shape_v1.h>
 #include <wlr/types/wlr_text_input_v3.h>
+#include <wlr/types/wlr_linux_dmabuf_v1.h>
+#include <wlr/types/wlr_primary_selection_v1.h>
+#include <wlr/types/wlr_idle_inhibit_v1.h>
+#include <wlr/types/wlr_gamma_control_v1.h>
 
 #ifndef SFD_NONBLOCK
 #define SFD_NONBLOCK O_NONBLOCK
@@ -473,11 +477,11 @@ void server_focus_view(Server *server, View *view) {
         server->active_output = view->output;
     }
     if (server->focused_view == view && !server->focused_surface) {
-        if (view && view->output) {
-            dwindle_focus(&view->output->layout, view);
-        }
-    return;
-    }
+		if (view && view->workspace) {
+			dwindle_focus(&view->workspace->layout, view);
+		}
+		return;
+	}
     listener_remove(&server->focused_surface_destroy);
     server->focused_surface = NULL;
     if (server->focused_view) {
@@ -486,9 +490,9 @@ void server_focus_view(Server *server, View *view) {
     server->focused_view = view;
     if (view) {
         view_focus(view);
-    if (view->output) {
-        dwindle_focus(&view->output->layout, view);
-    }
+       	if (view->workspace) {
+		dwindle_focus(&view->workspace->layout, view);
+	}
     if (server->seat &&
         server->active_keyboard &&
         view->type == VIEW_TYPE_XDG &&
@@ -514,47 +518,47 @@ void server_focus_view(Server *server, View *view) {
 }
 
 static void handle_focused_surface_destroy(struct wl_listener *listener, void *data) {
-Server *server = wl_container_of(listener, server, focused_surface_destroy);
-(void)data;
-listener_remove(&server->focused_surface_destroy);
-server->focused_surface = NULL;
-if (server->shutting_down) return;
-View *next = NULL;
-if (server->active_output) {
-next = dwindle_focused_view(&server->active_output->layout);
-if (!next) next = dwindle_first_view(&server->active_output->layout);
-}
-server->focused_view = NULL;
-server_focus_view(server, next);
+    Server *server = wl_container_of(listener, server, focused_surface_destroy);
+    (void)data;
+    listener_remove(&server->focused_surface_destroy);
+    server->focused_surface = NULL;
+    if (server->shutting_down) return;
+    View *next = NULL;
+    if (server->active_output && server->active_output->active_workspace) {
+		next = dwindle_focused_view(&server->active_output->active_workspace->layout);
+		if (!next) next = dwindle_first_view(&server->active_output->active_workspace->layout);
+	}
+    server->focused_view = NULL;
+    server_focus_view(server, next);
 }
 
 void server_focus_surface(Server *server, struct wlr_surface *surface) {
-if (!server || server->shutting_down) return;
-if (surface && server->focused_surface == surface) return;
-listener_remove(&server->focused_surface_destroy);
-if (server->focused_view) {
-view_unfocus(server->focused_view);
-server->focused_view = NULL;
-}
-server->focused_surface = surface;
-if (surface) {
-server->focused_surface_destroy.notify = handle_focused_surface_destroy;
-wl_signal_add(&surface->events.destroy, &server->focused_surface_destroy);
-if (server->seat && server->active_keyboard) {
-wlr_seat_set_keyboard(server->seat, server->active_keyboard);
-wlr_seat_keyboard_notify_enter(
-server->seat,
-surface,
-server->active_keyboard->keycodes,
-server->active_keyboard->num_keycodes,
-&server->active_keyboard->modifiers
-);
-return;
-}
-}
-if (server->seat) {
-wlr_seat_keyboard_notify_clear_focus(server->seat);
-}
+    if (!server || server->shutting_down) return;
+    if (surface && server->focused_surface == surface) return;
+    listener_remove(&server->focused_surface_destroy);
+    if (server->focused_view) {
+        view_unfocus(server->focused_view);
+        server->focused_view = NULL;
+    }
+    server->focused_surface = surface;
+    if (surface) {
+        server->focused_surface_destroy.notify = handle_focused_surface_destroy;
+        wl_signal_add(&surface->events.destroy, &server->focused_surface_destroy);
+        if (server->seat && server->active_keyboard) {
+            wlr_seat_set_keyboard(server->seat, server->active_keyboard);
+            wlr_seat_keyboard_notify_enter(
+                server->seat,
+                surface,
+    server->active_keyboard->keycodes,
+    server->active_keyboard->num_keycodes,
+    &server->active_keyboard->modifiers
+            );
+            return;
+        }
+    }
+    if (server->seat) {
+        wlr_seat_keyboard_notify_clear_focus(server->seat);
+    }
 }
 
 static void update_background(Server *server) {
@@ -619,16 +623,15 @@ void server_arrange(Server *server) {
     (void)layer_shell_arrange(server);
 
     wl_list_for_each(output, &server->outputs, link) {
-        dwindle_set_gaps(&output->layout, server->config.gaps_in, server->config.gaps_out);
-
-        output->layout.origin_x = output->usable_x;
-        output->layout.origin_y = output->usable_y;
-
-        int width = output->usable_width > 0 ? output->usable_width : output->width;
-        int height = output->usable_height > 0 ? output->usable_height : output->height;
-
-        dwindle_arrange(&output->layout, width, height);
-    }
+		Workspace *ws = output->active_workspace;
+		if (!ws) continue;
+		dwindle_set_gaps(&ws->layout, server->config.gaps_in, server->config.gaps_out);
+		ws->layout.origin_x = output->usable_x;
+		ws->layout.origin_y = output->usable_y;
+		int width = output->usable_width > 0 ? output->usable_width : output->width;
+		int height = output->usable_height > 0 ? output->usable_height : output->height;
+		dwindle_arrange(&ws->layout, width, height);
+	}
     server_raise_floating(server);
 
     wl_list_for_each(output, &server->outputs, link) {
@@ -675,12 +678,11 @@ static void handle_new_constraint(struct wl_listener *listener, void *data) {
     wlr_pointer_constraint_v1_send_activated(constraint);
 
     if (constraint->type == WLR_POINTER_CONSTRAINT_V1_LOCKED) {
-		server->cursor_hidden = true;
-		server->client_cursor_hidden = true;
-		wlr_cursor_set_surface(server->cursor, NULL, 0, 0);
-		wlr_cursor_unset_image(server->cursor);
-		wlr_cursor_set_xcursor(server->cursor, NULL, NULL);
-	}
+        server->cursor_hidden = true;
+        server->client_cursor_hidden = true;
+        wlr_cursor_set_surface(server->cursor, NULL, 0, 0);
+        wlr_cursor_unset_image(server->cursor);
+    }
 }
 
 bool server_init(Server *server) {
@@ -703,6 +705,14 @@ bool server_init(Server *server) {
 
     server->allocator = wlr_allocator_autocreate(server->backend, server->renderer);
     if (!server->allocator) return false;
+
+    if (!wlr_linux_dmabuf_v1_create_with_renderer(server->display, 4, server->renderer)) {
+        fprintf(stderr, "wyoWM: linux-dmabuf unavailable\n");
+    }
+
+    wlr_primary_selection_v1_device_manager_create(server->display);
+    wlr_idle_inhibit_v1_create(server->display);
+    wlr_gamma_control_manager_v1_create(server->display);
 
     server->compositor = wlr_compositor_create(server->display, 6, server->renderer);
     if (!server->compositor) return false;
@@ -1010,18 +1020,12 @@ void server_destroy(Server *server) {
     server->focused_surface = NULL;
     server->focused_view = NULL;
     ext_workspace_destroy(server);
-    Workspace *ws, *tmp_ws;
-    wl_list_for_each_safe(ws, tmp_ws, &server->workspaces, link) {
-        workspace_destroy(ws);
-    }
     layer_shell_destroy(server);
 
     while (!wl_list_empty(&server->outputs)) {
         Output *output = wl_container_of(server->outputs.next, output, link);
         output_destroy(output);
     }
-
-    workspaces_destroy(server);
 
     while (!wl_list_empty(&server->views)) {
         View *view = wl_container_of(server->views.next, view, link);
@@ -1030,18 +1034,17 @@ void server_destroy(Server *server) {
 
     PopupSurface *popup_surface;
     PopupSurface *popup_surface_tmp;
-
     wl_list_for_each_safe(popup_surface, popup_surface_tmp, &server->popup_surfaces, link) {
         if (!wl_list_empty(&popup_surface->destroy.link)) {
             wl_list_remove(&popup_surface->destroy.link);
             wl_list_init(&popup_surface->destroy.link);
         }
-
         wl_list_remove(&popup_surface->link);
         free(popup_surface);
     }
-
     wl_list_init(&server->popup_surfaces);
+
+    workspaces_destroy(server);
    	listener_remove(&server->new_output);
 	listener_remove(&server->new_toplevel);
 	listener_remove(&server->request_set_selection);

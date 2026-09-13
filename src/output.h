@@ -31,7 +31,6 @@ typedef struct Output {
     int usable_width;
     int usable_height;
 
-    DwindleLayout layout;
     struct Workspace *active_workspace;
     View *focused_view;
 

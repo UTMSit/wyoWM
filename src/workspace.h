@@ -4,19 +4,21 @@
 #include <stdbool.h>
 #include <wayland-server.h>
 #include "view.h"
+#include "layout.h"
 
 struct Server;
 struct Output;
 struct wlr_ext_workspace_handle_v1;
 
 typedef struct Workspace {
-    int id;
-    struct wl_list views;
-    struct wl_list link;
-    bool active;
-    struct Output *output;
-    struct Output *last_output;
-    struct wlr_ext_workspace_handle_v1 *handle;
+	int id;
+	struct wl_list views;
+	struct wl_list link;
+	bool active;
+	struct Output *output;
+	struct Output *last_output;
+	struct wlr_ext_workspace_handle_v1 *handle;
+	DwindleLayout layout;
 } Workspace;
 
 void workspaces_init(struct Server *server);

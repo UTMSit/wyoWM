@@ -60,22 +60,22 @@ static void handle_destroy(struct wl_listener *listener, void *data) {
 }
 
 void output_update_geometry(Output *output) {
-    Server *server = output->server;
-    struct wlr_box box = {0};
-
-    wlr_output_layout_get_box(server->output_layout, output->wlr_output, &box);
-
-    if (box.width > 0 && box.height > 0) {
-        output->x = box.x;
-        output->y = box.y;
-        output->width = box.width;
-        output->height = box.height;
-    } else {
-        output->x = 0;
-        output->y = 0;
-        output->width = output->wlr_output->width;
-        output->height = output->wlr_output->height;
-    }
+	Server *server = output->server;
+	struct wlr_box box = {0};
+	wlr_output_layout_get_box(server->output_layout, output->wlr_output, &box);
+	fprintf(stderr, "wyoWM: output %s geometry: x=%d y=%d w=%d h=%d\n",
+		output->wlr_output->name, box.x, box.y, box.width, box.height);
+	if (box.width > 0 && box.height > 0) {
+		output->x = box.x;
+		output->y = box.y;
+		output->width = box.width;
+		output->height = box.height;
+	} else {
+		output->x = 0;
+		output->y = 0;
+		output->width = output->wlr_output->width;
+		output->height = output->wlr_output->height;
+	}
 }
 
 Output *output_at(Server *server, double lx, double ly) {
@@ -136,9 +136,6 @@ Output *output_create(Server *server, struct wlr_output *wlr_output) {
 
     output->server = server;
     output->wlr_output = wlr_output;
-
-    dwindle_init(&output->layout);
-    dwindle_set_gaps(&output->layout, server->config.gaps_in, server->config.gaps_out);
 
     wlr_output_init_render(wlr_output, server->allocator, server->renderer);
     if (!output_commit_enabled(wlr_output)) {
@@ -202,10 +199,10 @@ Output *output_create(Server *server, struct wlr_output *wlr_output) {
         if (!view->mapped) continue;
 
         if (output->active_workspace) {
-            view->workspace = output->active_workspace;
-            dwindle_add_view(&output->layout, view);
-            view->tiled = true;
-        }
+			view->workspace = output->active_workspace;
+			dwindle_add_view(&output->active_workspace->layout, view);
+			view->tiled = true;
+		}
     }
 
     if (!server->active_output) {
@@ -270,8 +267,6 @@ void output_destroy(Output *output) {
     wl_list_remove(&output->frame.link);
     wl_list_remove(&output->destroy.link);
     wl_list_remove(&output->link);
-
-    dwindle_destroy(&output->layout);
 
     if (output->wallpaper_fade) {
         wlr_scene_node_destroy(&output->wallpaper_fade->node);
