@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <time.h>
 #include <wlr/util/box.h>
+#include "render.h"
 
 static void handle_frame(struct wl_listener *listener, void *data) {
     Output *output = wl_container_of(listener, output, frame);
@@ -41,11 +42,11 @@ static void handle_frame(struct wl_listener *listener, void *data) {
         active = true;
     }
 
-    wlr_scene_output_commit(output->scene_output, NULL);
+    output_render_custom(output);
 
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    wlr_scene_output_send_frame_done(output->scene_output, &ts);
+    if (!output_render_custom(output)) {
+        return;
+    }
 
     if (active) {
         wlr_output_schedule_frame(output->wlr_output);
@@ -138,6 +139,7 @@ Output *output_create(Server *server, struct wlr_output *wlr_output) {
     output->wlr_output = wlr_output;
 
     wlr_output_init_render(wlr_output, server->allocator, server->renderer);
+    wlr_output_lock_software_cursors(wlr_output, true);
     if (!output_commit_enabled(wlr_output)) {
         free(output);
         return NULL;

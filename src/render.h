@@ -1,10 +1,10 @@
-// src/render.h
 #ifndef RENDER_H
 #define RENDER_H
 
-struct Output;
-struct Server;
+#include <stdbool.h>
 
-void output_render_custom(struct Output *output);
+struct Output;
+
+bool output_render_custom(struct Output *output);
 
 #endif

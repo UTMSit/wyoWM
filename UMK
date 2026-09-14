@@ -1,6 +1,6 @@
 CC = gcc
 PKG_CONFIG = pkg-config
-PKG_MODULES = wayland-server wlroots-0.20 xkbcommon libinput libdrm gbm pixman-1 gdk-pixbuf-2.0
+PKG_MODULES = wayland-server wlroots-0.20 xkbcommon libinput libdrm gbm pixman-1 gdk-pixbuf-2.0 egl glesv2
 CFLAGS = -O3 -Wall -Wextra -Werror -march=native -flto=auto -DWLR_USE_UNSTABLE $(shell $(PKG_CONFIG) --cflags $(PKG_MODULES))
 LDFLAGS = $(shell $(PKG_CONFIG) --libs $(PKG_MODULES)) -lm -ldl
 SRCS = $(wildcard src/*.c)
