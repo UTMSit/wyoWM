@@ -223,10 +223,28 @@ static void parse_general_line(Config *config, const char *key, const char *valu
         config->active_opacity = clamp_opacity(atof(value));
     } else if (!strcasecmp(key, "inactive_opacity")) {
         config->inactive_opacity = clamp_opacity(atof(value));
-    } else if (!strcasecmp(key, "animation_duration_ms")) {
-        int duration = atoi(value);
-        if (duration < 0) duration = 0;
-        config->animation_duration_ms = duration;
+   	} else if (!strcasecmp(key, "animation_duration_ms")) {
+		int duration = atoi(value);
+		if (duration < 0) duration = 0;
+		config->animation_duration_ms = duration;
+	} else if (!strcasecmp(key, "anim_window_duration_ms")) {
+		int duration = atoi(value);
+		if (duration < 0) duration = 0;
+		config->anim_window_duration_ms = duration;
+	} else if (!strcasecmp(key, "anim_window_curve")) {
+		if (!strcasecmp(value, "linear")) config->anim_window_curve = 0;
+		else if (!strcasecmp(value, "ease_in")) config->anim_window_curve = 1;
+		else if (!strcasecmp(value, "ease_out")) config->anim_window_curve = 2;
+		else if (!strcasecmp(value, "ease_in_out")) config->anim_window_curve = 3;
+	} else if (!strcasecmp(key, "anim_opacity_duration_ms")) {
+		int duration = atoi(value);
+		if (duration < 0) duration = 0;
+		config->anim_opacity_duration_ms = duration;
+	} else if (!strcasecmp(key, "anim_opacity_curve")) {
+		if (!strcasecmp(value, "linear")) config->anim_opacity_curve = 0;
+		else if (!strcasecmp(value, "ease_in")) config->anim_opacity_curve = 1;
+		else if (!strcasecmp(value, "ease_out")) config->anim_opacity_curve = 2;
+		else if (!strcasecmp(value, "ease_in_out")) config->anim_opacity_curve = 3;
     } else if (!strcasecmp(key, "wallpaper")) {
         set_wallpaper_path(config, value);
     } else if (!strcasecmp(key, "wallpaper_mode")) {
@@ -418,6 +436,10 @@ void config_init_defaults(Config *config) {
     config->active_opacity = 1.0;
     config->inactive_opacity = 1.0;
     config->animation_duration_ms = 190;
+	config->anim_window_duration_ms = 160;
+	config->anim_window_curve = 2;
+	config->anim_opacity_duration_ms = 160;
+	config->anim_opacity_curve = 2;
     config->wallpaper_mode = WALLPAPER_MODE_FILL;
     config->has_keybinds = false;
     snprintf(config->cursor_theme, sizeof(config->cursor_theme), "default");

@@ -470,7 +470,7 @@ static bool render_with_blur(struct Output *output, BlurRect *rects, int num_rec
     return ok;
 }
 
-static bool output_has_fullscreen_view(Output *output) {
+bool output_has_fullscreen_view(Output *output) {
 	View *view;
 	wl_list_for_each(view, &output->server->views, link) {
 		if (view->output == output && view->mapped && view->fullscreen) {

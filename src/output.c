@@ -35,9 +35,13 @@ static void handle_frame(struct wl_listener *listener, void *data) {
         }
         active = true;
     }
-    if (!output_render_custom(output)) {
-        return;
-    }
+   	if (output_has_fullscreen_view(output)) {
+		wlr_scene_output_commit(output->scene_output, NULL);
+	} else {
+		if (!output_render_custom(output)) {
+			return;
+		}
+	}
     if (active) {
         wlr_output_schedule_frame(output->wlr_output);
     }

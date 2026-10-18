@@ -624,22 +624,44 @@ static void process_cursor(Server *server, uint64_t time_msec) {
     }
 
     if (view) {
-        if (server->focused_view != view || server->focused_surface) {
-            server_focus_view(server, view);
-        }
-
-        if (server->xcursor_manager) {
-            wlr_cursor_set_xcursor(
-                server->cursor,
-                server->xcursor_manager,
-                "left_ptr"
-            );
-        }
-
-        wlr_seat_pointer_clear_focus(server->seat);
-        wlr_seat_pointer_notify_frame(server->seat);
-        return;
-    }
+			if (server->focused_view != view || server->focused_surface) {
+				server_focus_view(server, view);
+			}
+  #if defined(WYO_HAS_XWAYLAND)
+			if (view->type == VIEW_TYPE_XWAYLAND && view->xwayland.xsurface && view->xwayland.xsurface->surface) {
+				double local_sx = server->cursor->x - view->x;
+				double local_sy = server->cursor->y - view->y;
+				if (server->seat->pointer_state.focused_surface != view->xwayland.xsurface->surface) {
+					if (server->xcursor_manager) {
+						wlr_cursor_set_xcursor(server->cursor, server->xcursor_manager, "left_ptr");
+					}
+					wlr_seat_pointer_notify_enter(server->seat, view->xwayland.xsurface->surface, local_sx, local_sy);
+				}
+				wlr_seat_pointer_notify_motion(server->seat, time_msec, local_sx, local_sy);
+				wlr_seat_pointer_notify_frame(server->seat);
+				return;
+			}
+  #endif
+			if (view->type == VIEW_TYPE_XDG && view->xdg.xdg_surface && view->xdg.xdg_surface->surface) {
+				double local_sx = server->cursor->x - view->x;
+				double local_sy = server->cursor->y - view->y;
+				if (server->seat->pointer_state.focused_surface != view->xdg.xdg_surface->surface) {
+					if (server->xcursor_manager) {
+						wlr_cursor_set_xcursor(server->cursor, server->xcursor_manager, "left_ptr");
+					}
+					wlr_seat_pointer_notify_enter(server->seat, view->xdg.xdg_surface->surface, local_sx, local_sy);
+				}
+				wlr_seat_pointer_notify_motion(server->seat, time_msec, local_sx, local_sy);
+				wlr_seat_pointer_notify_frame(server->seat);
+				return;
+			}
+			if (server->xcursor_manager) {
+				wlr_cursor_set_xcursor(server->cursor, server->xcursor_manager, "left_ptr");
+			}
+			wlr_seat_pointer_clear_focus(server->seat);
+			wlr_seat_pointer_notify_frame(server->seat);
+			return;
+		}
 
     server_focus_view(server, NULL);
 

@@ -975,9 +975,12 @@ bool server_init(Server *server) {
     ipc_init(&server->ipc, server, server->loop, ipc_path);
 
     #if defined(WYO_HAS_XWAYLAND)
-        server->xwayland = wlr_xwayland_create(server->display, server->compositor, true);
-        if (server->xwayland) {
-            server->xwayland_ready.notify = handle_xwayland_ready;
+	server->xwayland = wlr_xwayland_create(server->display, server->compositor, false);
+	if (server->xwayland) {
+		if (server->xwayland->display_name) {
+			setenv("DISPLAY", server->xwayland->display_name, 1);
+		}
+		server->xwayland_ready.notify = handle_xwayland_ready;
             wl_signal_add(&server->xwayland->events.ready, &server->xwayland_ready);
             server->xwayland_new_surface.notify = handle_xwayland_new_surface;
             wl_signal_add(&server->xwayland->events.new_surface, &server->xwayland_new_surface);

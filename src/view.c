@@ -9,8 +9,6 @@
 #include <ctype.h>
 #include <string.h>
 
-#define VIEW_ANIMATION_DURATION_MS 160
-
 static void handle_map(struct wl_listener *listener, void *data);
 static void handle_unmap(struct wl_listener *listener, void *data);
 static void handle_destroy(struct wl_listener *listener, void *data);
@@ -937,20 +935,21 @@ void view_cleanup_for_shutdown(View *view) {
 		listener_remove(&view->xdg.new_popup);
 		listener_remove(&view->set_title);
 		listener_remove(&view->set_app_id);
-   #if defined(WYO_HAS_XWAYLAND)
-		if (view->type == VIEW_TYPE_XWAYLAND) {
-			listener_remove(&view->xwayland.associate);
-			listener_remove(&view->xwayland.dissociate);
-			listener_remove(&view->xwayland.request_configure);
-			listener_remove(&view->xwayland.request_activate);
-			listener_remove(&view->xwayland.request_close);
-			listener_remove(&view->xwayland.destroy);
-			listener_remove(&view->xwayland.map);
-			listener_remove(&view->xwayland.unmap);
-		}
-   #endif
 		view->xdg.listeners_initialized = false;
 	}
+   #if defined(WYO_HAS_XWAYLAND)
+	if (view->type == VIEW_TYPE_XWAYLAND) {
+		listener_remove(&view->xwayland.associate);
+		listener_remove(&view->xwayland.dissociate);
+		listener_remove(&view->xwayland.request_configure);
+		listener_remove(&view->xwayland.request_activate);
+		listener_remove(&view->xwayland.request_close);
+		listener_remove(&view->xwayland.request_fullscreen);
+		listener_remove(&view->xwayland.destroy);
+		listener_remove(&view->xwayland.map);
+		listener_remove(&view->xwayland.unmap);
+	}
+   #endif
     view_foreign_destroy(view);
 
     if (view->scene_tree) {
@@ -1012,32 +1011,28 @@ void view_set_geometry(View *view, int x, int y, int width, int height) {
     view->target_width = width;
     view->target_height = height;
 
-    int duration = VIEW_ANIMATION_DURATION_MS;
-
-    if (view->server) {
-        duration = view->server->config.animation_duration_ms;
-    }
-
-    if (duration < 0) duration = 0;
-
-    bool animate = false;
-
-    if (duration > 0 &&
-        view->mapped &&
-        !first &&
-        (pos_changed || size_changed) &&
-        !view->dragging) {
-        animate = true;
-
-        if (view->server &&
-            (view->server->shutting_down || view->server->drag.view == view)) {
-            animate = false;
-        }
-    }
-
-    if (animate) {
-        animation_set_target(&view->anim_x, (double)new_x, duration, EASING_EASE_OUT);
-        animation_set_target(&view->anim_y, (double)new_y, duration, EASING_EASE_OUT);
+   	int duration = 160;
+	EasingCurve curve = EASING_EASE_OUT;
+	if (view->server) {
+		duration = view->server->config.anim_window_duration_ms;
+		curve = (EasingCurve)view->server->config.anim_window_curve;
+	}
+	if (duration < 0) duration = 0;
+	bool animate = false;
+	if (duration > 0 &&
+		view->mapped &&
+		!first &&
+		(pos_changed || size_changed) &&
+		!view->dragging) {
+		animate = true;
+		if (view->server &&
+			(view->server->shutting_down || view->server->drag.view == view)) {
+			animate = false;
+		}
+	}
+	if (animate) {
+		animation_set_target(&view->anim_x, (double)new_x, duration, curve);
+		animation_set_target(&view->anim_y, (double)new_y, duration, curve);
 
         if (view->output) {
             wlr_output_schedule_frame(view->output->wlr_output);
@@ -1093,8 +1088,9 @@ void view_focus(View *view) {
         }
     #endif
 
-    int duration = (view->server && !view->server->shutting_down) ? view->server->config.animation_duration_ms : 0;
-    animation_set_target(&view->border_blend, 1.0, duration, EASING_EASE_OUT);
+    int duration = (view->server && !view->server->shutting_down) ? view->server->config.anim_opacity_duration_ms : 0;
+	EasingCurve curve = view->server ? (EasingCurve)view->server->config.anim_opacity_curve : EASING_EASE_OUT;
+	animation_set_target(&view->border_blend, 1.0, duration, curve);
     view_update_border(view);
     view_foreign_sync(view);
 
@@ -1116,8 +1112,9 @@ void view_unfocus(View *view) {
         }
     #endif
 
-    int duration = (view->server && !view->server->shutting_down) ? view->server->config.animation_duration_ms : 0;
-    animation_set_target(&view->border_blend, 0.0, duration, EASING_EASE_OUT);
+    int duration = (view->server && !view->server->shutting_down) ? view->server->config.anim_opacity_duration_ms : 0;
+	EasingCurve curve = view->server ? (EasingCurve)view->server->config.anim_opacity_curve : EASING_EASE_OUT;
+	animation_set_target(&view->border_blend, 0.0, duration, curve);
     view_update_border(view);
     view_foreign_sync(view);
 
@@ -1182,17 +1179,17 @@ static void handle_map(struct wl_listener *listener, void *data) {
         wlr_scene_node_set_enabled(&view->scene_tree->node, true);
     }
 
-    int duration = view->server->config.animation_duration_ms;
-    if (duration < 0) duration = 0;
-
-    if (duration > 0) {
-        double target_opacity = view->server->config.active_opacity;
-        if (target_opacity < 0.0) target_opacity = 0.0;
-        if (target_opacity > 1.0) target_opacity = 1.0;
-        animation_set_target(&view->opacity, 0.0, 0, EASING_LINEAR);
-        view_apply_opacity(view);
-        animation_set_target(&view->opacity, target_opacity, duration, EASING_EASE_OUT);
-    }
+   	int duration = view->server->config.anim_opacity_duration_ms;
+	EasingCurve curve = (EasingCurve)view->server->config.anim_opacity_curve;
+	if (duration < 0) duration = 0;
+	if (duration > 0) {
+		double target_opacity = view->server->config.active_opacity;
+		if (target_opacity < 0.0) target_opacity = 0.0;
+		if (target_opacity > 1.0) target_opacity = 1.0;
+		animation_set_target(&view->opacity, 0.0, 0, EASING_LINEAR);
+		view_apply_opacity(view);
+		animation_set_target(&view->opacity, target_opacity, duration, curve);
+	}
 
     server_view_mapped(view->server, view);
 

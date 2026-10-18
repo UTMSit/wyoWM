@@ -57,6 +57,10 @@ typedef struct Config {
 	double active_opacity;
 	double inactive_opacity;
 	int animation_duration_ms;
+	int anim_window_duration_ms;
+	int anim_window_curve;
+	int anim_opacity_duration_ms;
+	int anim_opacity_curve;
 	char wallpaper_path[1024];
     WallpaperMode wallpaper_mode;
     char kb_rules[64];

@@ -25,11 +25,10 @@ export XCURSOR_PATH="$HOME/.local/share/icons:$HOME/.icons:/usr/share/icons:/usr
 unset WAYLAND_DISPLAY
 unset DISPLAY
 
-if [ -n "$XDG_RUNTIME_DIR" ]; then
-	rm -f "$XDG_RUNTIME_DIR/wayland-0" "$XDG_RUNTIME_DIR/wayland-0.lock"
-	rm -f "$XDG_RUNTIME_DIR/wayland-1" "$XDG_RUNTIME_DIR/wayland-1.lock"
-	rm -f /tmp/.X11-unix/X0
-	rm -f /tmp/.X11-unix/X1
+if [ -d "/tmp/.X11-unix" ]; then
+	for f in /tmp/.X11-unix/X*; do
+		[ -e "$f" ] && rm -f "$f" 2>/dev/null || true
+	done
 fi
 
 export WLR_BACKEND=drm
