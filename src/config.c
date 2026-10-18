@@ -389,29 +389,29 @@ static void parse_config_line(Config *config, const char *line) {
                        (right[9] == '\0' ||
                         isspace((unsigned char)right[9]) ||
                         isdigit((unsigned char)right[9]))) {
-                char *num = trim(right + 9);
-                char *end = NULL;
-                long id = strtol(num, &end, 10);
+                            char *num = trim(right + 9);
+                            char *end = NULL;
+                            long id = strtol(num, &end, 10);
 
-                if (end != num && *end == '\0') {
-                    if (id == 0) {
-                        id = 10;
-                    }
+                            if (end != num && *end == '\0') {
+                                if (id == 0) {
+                                    id = 10;
+                                }
 
-                    if (id >= 1 && id <= 10) {
-                        action = ACTION_WORKSPACE;
-                        arg = (int)id;
-                    }
-                }
-            }
+                                if (id >= 1 && id <= 10) {
+                                    action = ACTION_WORKSPACE;
+                                    arg = (int)id;
+                                }
+                            }
+                        }
 
-				if (action != ACTION_NONE) {
-					add_bind(config, modifiers, keycode, keysym, action, command, arg);
-				}
-			}
-		}
-		free(keys_copy);
-	} else if (!strncasecmp(left, "general.", 8)) {
+				        if (action != ACTION_NONE) {
+								add_bind(config, modifiers, keycode, keysym, action, command, arg);
+								}
+			            }
+		            }
+		            free(keys_copy);
+	            } else if (!strncasecmp(left, "general.", 8)) {
 		char *key = left + 8;
 		parse_general_line(config, key, right);
 	} else if (!strcasecmp(left, "exec-once") || !strcasecmp(left, "exec_once")) {
@@ -419,6 +419,42 @@ static void parse_config_line(Config *config, const char *line) {
 		if (exec) {
 			exec->command = strdup(right);
 			wl_list_insert(&config->exec_once, &exec->link);
+		}
+	} else if (!strncasecmp(left, "bezier", 6)) {
+		char *eq2 = strchr(right, ',');
+		if (eq2) {
+			*eq2 = '\0';
+			char *name = trim(right);
+			char *vals = eq2 + 1;
+			double p1x, p1y, p2x, p2y;
+			if (sscanf(vals, "%lf,%lf,%lf,%lf", &p1x, &p1y, &p2x, &p2y) == 4) {
+				if (config->bezier_count < MAX_BEZIERS) {
+					snprintf(config->beziers[config->bezier_count].name, 64, "%s", name);
+					config->beziers[config->bezier_count].curve.p1x = p1x;
+					config->beziers[config->bezier_count].curve.p1y = p1y;
+					config->beziers[config->bezier_count].curve.p2x = p2x;
+					config->beziers[config->bezier_count].curve.p2y = p2y;
+					config->bezier_count++;
+				}
+			}
+		}
+	} else if (!strncasecmp(left, "animation", 9)) {
+		char *eq2 = strchr(right, ',');
+		if (eq2) {
+			*eq2 = '\0';
+			char *type = trim(right);
+			char *vals = eq2 + 1;
+			int enabled, duration;
+			char curve_name[64] = {0};
+			if (sscanf(vals, "%d,%d,%63s", &enabled, &duration, curve_name) >= 3) {
+				if (config->anim_rule_count < MAX_ANIM_RULES) {
+					snprintf(config->anim_rules[config->anim_rule_count].type, 64, "%s", type);
+					config->anim_rules[config->anim_rule_count].enabled = enabled;
+					config->anim_rules[config->anim_rule_count].duration_ms = duration * 100;
+					snprintf(config->anim_rules[config->anim_rule_count].curve_name, 64, "%s", curve_name);
+					config->anim_rule_count++;
+				}
+			}
 		}
 	}
 

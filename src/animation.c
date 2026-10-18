@@ -1,7 +1,19 @@
+#include "animation.h"
+#include <math.h>
+#include <time.h>
+#include <stdio.h>
+
+double clamp01(double v) {
+	if (v < 0.0) return 0.0;
+	if (v > 1.0) return 1.0;
+	return v;
+}
+
 static double cubic_bezier(double t, double p1, double p2) {
 	double u = 1.0 - t;
 	return 3.0 * u * u * t * p1 + 3.0 * u * t * t * p2 + t * t * t;
 }
+
 static double solve_bezier_x(double x, double p1x, double p2x) {
 	double t = x;
 	for (int i = 0; i < 8; i++) {
@@ -13,6 +25,7 @@ static double solve_bezier_x(double x, double p1x, double p2x) {
 	}
 	return t;
 }
+
 static double easing_value(EasingCurve curve, double t, const BezierCurve *b) {
 	switch (curve) {
 		case EASING_LINEAR: return t;
@@ -28,6 +41,26 @@ static double easing_value(EasingCurve curve, double t, const BezierCurve *b) {
 	}
 	return t;
 }
+
+int64_t animation_now_ms(void) {
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
+void animation_init(AnimatedValue *value, double initial) {
+	value->start = initial;
+	value->current = initial;
+	value->target = initial;
+	value->velocity = 0.0;
+	value->duration_ms = 0;
+	value->start_time = 0;
+	value->curve = EASING_LINEAR;
+	value->bezier.p1x = 0.0; value->bezier.p1y = 0.0;
+	value->bezier.p2x = 1.0; value->bezier.p2y = 1.0;
+	value->active = false;
+}
+
 void animation_set_target(AnimatedValue *value, double target, int duration_ms, EasingCurve curve, const BezierCurve *bezier) {
 	if (duration_ms <= 0 || value->current == target) {
 		value->start = target;
@@ -49,6 +82,7 @@ void animation_set_target(AnimatedValue *value, double target, int duration_ms, 
 	if (bezier) value->bezier = *bezier;
 	value->active = true;
 }
+
 void animation_update(AnimatedValue *value, int64_t now_ms) {
 	if (!value || !value->active) return;
 	if (value->duration_ms <= 0) {
@@ -71,4 +105,8 @@ void animation_update(AnimatedValue *value, int64_t now_ms) {
 	double progress = easing_value(value->curve, clamp01(t), &value->bezier);
 	value->current = value->start + (value->target - value->start) * progress;
 	value->velocity = value->current - previous;
+}
+
+bool animation_finished(AnimatedValue *value) {
+	return !value->active;
 }

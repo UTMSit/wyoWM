@@ -6,6 +6,22 @@
 #include <stddef.h>
 #include <wayland-server-core.h>
 #include <xkbcommon/xkbcommon.h>
+#include "animation.h"
+
+#define MAX_BEZIERS 32
+#define MAX_ANIM_RULES 16
+
+typedef struct {
+	char name[64];
+	BezierCurve curve;
+} ConfigBezierEntry;
+
+typedef struct {
+	char type[64];
+	bool enabled;
+	int duration_ms;
+	char curve_name[64];
+} ConfigAnimRule;
 
 typedef enum {
     ACTION_NONE,
@@ -74,6 +90,10 @@ typedef struct Config {
     struct wl_list keybinds;
 	struct wl_list exec_once;
 	bool has_keybinds;
+	ConfigBezierEntry beziers[MAX_BEZIERS];
+	int bezier_count;
+	ConfigAnimRule anim_rules[MAX_ANIM_RULES];
+	int anim_rule_count;
 } Config;
 
 void config_init_defaults(Config *config);
@@ -83,4 +103,5 @@ void config_free_keybinds(Config *config);
 void config_destroy(Config *config);
 bool config_default_path(char *out, size_t out_size);
 void config_load_workspace_keybinds(Config *config);
+
 #endif

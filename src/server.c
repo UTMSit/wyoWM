@@ -29,6 +29,7 @@
 #include <wlr/types/wlr_buffer.h>
 #include <wlr/render/drm_format_set.h>
 #include <drm_fourcc.h>
+#include <wlr/types/wlr_tearing_control_v1.h>
 
 #ifndef SFD_NONBLOCK
 #define SFD_NONBLOCK O_NONBLOCK
@@ -114,7 +115,7 @@ static void reload_config(Server *server) {
                 wlr_scene_node_set_position(&output->wallpaper_fade->node, output->x, output->y);
                 wlr_scene_buffer_set_dest_size(output->wallpaper_fade, output->width, output->height);
                 animation_init(&output->wallpaper_fade_anim, 1.0);
-                animation_set_target(&output->wallpaper_fade_anim, 0.0, fade_ms, EASING_EASE_OUT);
+                animation_set_target(&output->wallpaper_fade_anim, 0.0, fade_ms, EASING_EASE_OUT, NULL);
                 wlr_scene_buffer_set_opacity(output->wallpaper_fade, 1.0f);
                 if (output->wlr_output) {
                     wlr_output_schedule_frame(output->wlr_output);
@@ -800,6 +801,8 @@ bool server_init(Server *server) {
         fprintf(stderr, "wyoWM: linux-dmabuf unavailable\n");
     }
 
+    wlr_tearing_control_manager_v1_create(server->display, 1);
+
     wlr_primary_selection_v1_device_manager_create(server->display);
     wlr_idle_inhibit_v1_create(server->display);
     wlr_gamma_control_manager_v1_create(server->display);
@@ -975,7 +978,7 @@ bool server_init(Server *server) {
     ipc_init(&server->ipc, server, server->loop, ipc_path);
 
     #if defined(WYO_HAS_XWAYLAND)
-	server->xwayland = wlr_xwayland_create(server->display, server->compositor, false);
+    server->xwayland = wlr_xwayland_create(server->display, server->compositor, false);
 	if (server->xwayland) {
 		if (server->xwayland->display_name) {
 			setenv("DISPLAY", server->xwayland->display_name, 1);

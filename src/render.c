@@ -482,31 +482,31 @@ bool output_has_fullscreen_view(Output *output) {
 
 bool output_render_custom(struct Output *output) {
     if (!output || !output->wlr_output || !output->server) return false;
-    struct wlr_output *wlr_output = output->wlr_output;
-    if (!wlr_output->needs_frame && !output->render_pending) return false;
-    output->render_pending = false;
-    Server *server = output->server;
+	output->render_pending = false;
 
-    if (!g_blur_tried) {
-        g_blur_tried = true;
-        if (wlr_renderer_is_gles2(server->renderer)) {
-            GLScope scope;
-            if (gl_scope_begin(server, &scope)) {
-                blur_init(&g_blur, 6);
-                gl_scope_end(server, &scope);
-            }
-        }
-    }
+	Server *server = output->server;
 
-    BlurRect rects[MAX_BLUR_RECTS];
-    int num_rects = 0;
-    if (g_blur.initialized) {
-        num_rects = collect_blur_rects(server->scene_tree,
-            -output->x, -output->y, rects, MAX_BLUR_RECTS, 0);
-    }
+	if (!g_blur_tried) {
+		g_blur_tried = true;
+		if (wlr_renderer_is_gles2(server->renderer)) {
+			GLScope scope;
+			if (gl_scope_begin(server, &scope)) {
+				blur_init(&g_blur, 6);
+				gl_scope_end(server, &scope);
+			}
+		}
+	}
 
-    if (num_rects > 0 && g_blur.initialized && !output_has_fullscreen_view(output)) {
-        return render_with_blur(output, rects, num_rects);
-    }
-    return render_direct(output);
+	BlurRect rects[MAX_BLUR_RECTS];
+	int num_rects = 0;
+	if (g_blur.initialized && !output_has_fullscreen_view(output)) {
+		num_rects = collect_blur_rects(server->scene_tree,
+			-output->x, -output->y, rects, MAX_BLUR_RECTS, 0);
+	}
+
+	if (num_rects > 0) {
+		return render_with_blur(output, rects, num_rects);
+	}
+
+	return wlr_scene_output_commit(output->scene_output, NULL);
 }

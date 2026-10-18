@@ -102,7 +102,7 @@ static bool output_try_state(struct wlr_output *wlr_output, struct wlr_output_mo
 }
 
 static bool output_commit_enabled(struct wlr_output *wlr_output) {
-    struct wlr_output_mode *preferred = wlr_output_preferred_mode(wlr_output);
+	struct wlr_output_mode *preferred = wlr_output_preferred_mode(wlr_output);
 
     if (preferred && output_try_state(wlr_output, preferred)) {
         return true;
