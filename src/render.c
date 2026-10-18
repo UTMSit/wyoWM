@@ -432,10 +432,10 @@ static int collect_blur_rects(
 		if (view && view->mapped && view->root_tree && view->width > 0 && view->height > 0) {
 			cx = view->root_tree->node.x - output->x;
 			cy = view->root_tree->node.y - output->y;
-			w = view->root_tree->node.x + (int)lround(view->anim_w.current * view->anim_scale.current) - cx;
-			h = view->root_tree->node.y + (int)lround(view->anim_h.current * view->anim_scale.current) - cy;
+
 			w = (int)lround(view->anim_w.current * view->anim_scale.current);
 			h = (int)lround(view->anim_h.current * view->anim_scale.current);
+
 			if (w <= 0) w = view->width;
 			if (h <= 0) h = view->height;
 
@@ -1098,6 +1098,14 @@ bool output_try_direct_scanout(Output *output) {
 
 	View *view = output_fullscreen_view(output);
 	if (!view || !view->root_tree) {
+		return false;
+	}
+
+	if (view->anim_x.active ||
+		view->anim_y.active ||
+		view->anim_w.active ||
+		view->anim_h.active ||
+		view->anim_scale.active) {
 		return false;
 	}
 

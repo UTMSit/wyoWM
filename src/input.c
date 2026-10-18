@@ -1167,18 +1167,18 @@ static void handle_cursor_button(struct wl_listener *listener, void *data) {
 			}
         }
 
-        if (view) {
-            server_focus_view(server, view);
-            server_arrange(server);
-        }
-
         server->drag.active = false;
-        server->drag.move = false;
-        server->drag.resize = false;
-        server->drag.restore_tiled = false;
-        server->drag.tiled_resize = false;
-        server->drag.view = NULL;
-        server->drag.output = NULL;
+		server->drag.move = false;
+		server->drag.resize = false;
+		server->drag.restore_tiled = false;
+		server->drag.tiled_resize = false;
+		server->drag.view = NULL;
+		server->drag.output = NULL;
+
+		if (view) {
+			server_focus_view(server, view);
+			server_arrange(server);
+		}
 
         if (!server->drag.active && !server->dnd_active && server->cursor_restore_pending) {
             if (server->xcursor_manager) {

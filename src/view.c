@@ -483,14 +483,15 @@ static void view_apply_geometry(View *view) {
 	int vh = 0;
 	view_visual_size(view, &vw, &vh);
 
-	double s = view->anim_scale.current;
-	if (s < 0.01) s = 0.01;
+	int cx = (int)lround(view->anim_x.current);
+	int cy = (int)lround(view->anim_y.current);
 
-	int x = (int)lround(view->anim_x.current + (view->anim_w.current - vw) * 0.5);
-	int y = (int)lround(view->anim_y.current + (view->anim_h.current - vh) * 0.5);
+	int x = cx - (int)lround((double)vw * 0.5);
+	int y = cy - (int)lround((double)vh * 0.5);
 
 	int old_x = view->root_tree->node.x;
 	int old_y = view->root_tree->node.y;
+
 	if (x != old_x || y != old_y) {
 		wlr_scene_node_set_position(&view->root_tree->node, x, y);
 	}
@@ -1094,6 +1095,7 @@ void view_set_geometry(View *view, int x, int y, int width, int height) {
 
 	int offset_x = 0;
 	int offset_y = 0;
+
 	if (view->output) {
 		offset_x = view->output->x;
 		offset_y = view->output->y;
@@ -1111,12 +1113,24 @@ void view_set_geometry(View *view, int x, int y, int width, int height) {
 	bool target_pos_changed = old_x != new_x || old_y != new_y;
 	bool first = view->target_width <= 0 || view->target_height <= 0;
 
-	int visual_x = (int)lround(view->anim_x.current);
-	int visual_y = (int)lround(view->anim_y.current);
+	double new_cx = (double)new_x + (double)width * 0.5;
+	double new_cy = (double)new_y + (double)height * 0.5;
+
+	int target_cx = (int)lround(new_cx);
+	int target_cy = (int)lround(new_cy);
+
+	int visual_cx = (int)lround(view->anim_x.current);
+	int visual_cy = (int)lround(view->anim_y.current);
 	int visual_w = (int)lround(view->anim_w.current);
 	int visual_h = (int)lround(view->anim_h.current);
-	bool visual_changed = visual_x != new_x || visual_y != new_y || visual_w != width || visual_h != height;
-	bool anim_running = view->anim_x.active || view->anim_y.active || view->anim_w.active || view->anim_h.active;
+
+	bool visual_center_changed = visual_cx != target_cx || visual_cy != target_cy;
+	bool visual_changed = visual_center_changed || visual_w != width || visual_h != height;
+
+	bool anim_running = view->anim_x.active ||
+		view->anim_y.active ||
+		view->anim_w.active ||
+		view->anim_h.active;
 
 	view->x = new_x;
 	view->y = new_y;
@@ -1136,6 +1150,7 @@ void view_set_geometry(View *view, int x, int y, int width, int height) {
 			if (strcmp(view->server->config.anim_rules[i].type, "windows") == 0 &&
 				view->server->config.anim_rules[i].enabled) {
 				duration = view->server->config.anim_rules[i].duration_ms;
+
 				for (int j = 0; j < view->server->config.bezier_count; j++) {
 					if (strcmp(view->server->config.beziers[j].name,
 							   view->server->config.anim_rules[i].curve_name) == 0) {
@@ -1144,9 +1159,11 @@ void view_set_geometry(View *view, int x, int y, int width, int height) {
 						break;
 					}
 				}
+
 				if (!bezier) {
 					curve = (EasingCurve)view->server->config.anim_window_curve;
 				}
+
 				break;
 			}
 		}
@@ -1157,10 +1174,12 @@ void view_set_geometry(View *view, int x, int y, int width, int height) {
 	}
 
 	bool animate = false;
+
 	if (duration > 0 && view->mapped && !first && !view->dragging) {
 		if (target_pos_changed || size_changed || visual_changed) {
 			animate = true;
 		}
+
 		if (view->server &&
 			(view->server->shutting_down || view->server->drag.view == view)) {
 			animate = false;
@@ -1168,16 +1187,17 @@ void view_set_geometry(View *view, int x, int y, int width, int height) {
 	}
 
 	if (animate) {
-		animation_set_target(&view->anim_x, (double)new_x, duration, curve, bezier);
-		animation_set_target(&view->anim_y, (double)new_y, duration, curve, bezier);
+		animation_set_target(&view->anim_x, new_cx, duration, curve, bezier);
+		animation_set_target(&view->anim_y, new_cy, duration, curve, bezier);
 		animation_set_target(&view->anim_w, (double)width, duration, curve, bezier);
 		animation_set_target(&view->anim_h, (double)height, duration, curve, bezier);
+
 		if (view->output) {
 			wlr_output_schedule_frame(view->output->wlr_output);
 		}
 	} else if (visual_changed || !anim_running) {
-		animation_set_target(&view->anim_x, (double)new_x, 0, EASING_LINEAR, NULL);
-		animation_set_target(&view->anim_y, (double)new_y, 0, EASING_LINEAR, NULL);
+		animation_set_target(&view->anim_x, new_cx, 0, EASING_LINEAR, NULL);
+		animation_set_target(&view->anim_y, new_cy, 0, EASING_LINEAR, NULL);
 		animation_set_target(&view->anim_w, (double)width, 0, EASING_LINEAR, NULL);
 		animation_set_target(&view->anim_h, (double)height, 0, EASING_LINEAR, NULL);
 	}
