@@ -276,16 +276,17 @@ void server_switch_workspace(Server *server, Output *output, int id) {
 		server_focus_view(server, next);
 
 		if (server->cursor) {
-			wlr_cursor_warp(
-				server->cursor,
-				NULL,
-				dest->x + dest->width / 2.0,
-				dest->y + dest->height / 2.0
-			);
-			if (dest->wlr_output) {
-				wlr_output_schedule_frame(dest->wlr_output);
-			}
-		}
+        wlr_cursor_warp(
+            server->cursor,
+            NULL,
+            dest->x + dest->width / 2.0,
+            dest->y + dest->height / 2.0
+        );
+        dest->render_pending = true;
+        if (dest->wlr_output) {
+            wlr_output_schedule_frame(dest->wlr_output);
+        }
+    }
 		ext_workspace_sync(server);
 		return;
 	}

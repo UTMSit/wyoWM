@@ -30,6 +30,7 @@ install:
 	sudo install -Dm755 wyowm /usr/local/bin/wyowm
 	sudo install -Dm755 wyoctl /usr/local/bin/wyoctl
 	sudo install -Dm755 wyowm-session /usr/local/bin/wyowm-session
+	sudo install -Dm755 wyowm-session-nested /usr/local/bin/wyowm-session-nested
 	sudo install -Dm755 wyoconf-reload /usr/local/bin/wyoconf-reload
 	sudo install -Dm644 wyowm.desktop /usr/share/wayland-sessions/wyowm.desktop
 eoc
@@ -37,6 +38,7 @@ uninstall:
 	sudo rm -f /usr/local/bin/wyowm
 	sudo rm -f /usr/local/bin/wyoctl
 	sudo rm -f /usr/local/bin/wyowm-session
+	sudo rm -f /usr/local/bin/wyowm-session-nested
 	sudo rm -f /usr/local/bin/wyoconf-reload
 	sudo rm -f /usr/share/wayland-sessions/wyowm.desktop
 eoc

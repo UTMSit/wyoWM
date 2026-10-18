@@ -12,6 +12,13 @@
 #endif
 #include "animation.h"
 
+#if __has_include(<wlr/xwayland.h>)
+#include <wlr/xwayland.h>
+#ifndef WYO_HAS_XWAYLAND
+#define WYO_HAS_XWAYLAND 1
+#endif
+#endif
+
 struct Server;
 struct Workspace;
 
@@ -74,11 +81,27 @@ typedef struct View {
             struct wl_listener new_popup;
             bool listeners_initialized;
         } xdg;
+
+        #if defined(WYO_HAS_XWAYLAND)
+        struct {
+        struct wlr_xwayland_surface *xsurface;
+        struct wl_listener associate;
+        struct wl_listener dissociate;
+        struct wl_listener request_configure;
+        struct wl_listener request_activate;
+        struct wl_listener request_close;
+        struct wl_listener request_fullscreen;
+        struct wl_listener destroy;
+        struct wl_listener map;
+        struct wl_listener unmap;
+        } xwayland;
+        #endif
     };
 
     struct wlr_xdg_toplevel_decoration_v1 *decoration;
     bool decoration_mode_set;
     struct wl_listener decoration_destroy;
+    struct wl_listener decoration_request_mode;
     AnimatedValue border_blend;
 #if defined(WYO_HAS_FOREIGN_TOPLEVEL)
     struct wlr_foreign_toplevel_handle_v1 *foreign_handle;
@@ -111,4 +134,7 @@ void view_move_by(View *view, int dx, int dy);
 void view_refresh_decorations(View *view);
 bool view_frame_update(View *view, int64_t now_ms);
 void view_foreign_sync(View *view);
+#if defined(WYO_HAS_XWAYLAND)
+View *view_create_xwayland(struct Server *server, struct wlr_xwayland_surface *xsurface);
+#endif
 #endif

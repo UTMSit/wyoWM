@@ -408,10 +408,9 @@ static void parse_config_line(Config *config, const char *line) {
 }
 
 void config_init_defaults(Config *config) {
-	memset(config, 0, sizeof(Config));
-	wl_list_init(&config->keybinds);
-	wl_list_init(&config->exec_once);
-
+    memset(config, 0, sizeof(Config));
+    wl_list_init(&config->keybinds);
+    wl_list_init(&config->exec_once);
     config->border_width = 2;
     config->gaps_in = 4;
     config->gaps_out = 8;
@@ -423,21 +422,22 @@ void config_init_defaults(Config *config) {
     config->has_keybinds = false;
     snprintf(config->cursor_theme, sizeof(config->cursor_theme), "default");
     config->cursor_size = 24;
-
     config->border_color_focused[0] = 0.4f;
     config->border_color_focused[1] = 0.6f;
     config->border_color_focused[2] = 1.0f;
     config->border_color_focused[3] = 1.0f;
-
     config->border_color_unfocused[0] = 0.3f;
     config->border_color_unfocused[1] = 0.3f;
     config->border_color_unfocused[2] = 0.35f;
     config->border_color_unfocused[3] = 1.0f;
-
     config->background_color[0] = 0.04f;
     config->background_color[1] = 0.05f;
     config->background_color[2] = 0.07f;
     config->background_color[3] = 1.0f;
+
+    snprintf(config->kb_rules, sizeof(config->kb_rules), "evdev");
+    snprintf(config->kb_model, sizeof(config->kb_model), "pc105");
+    snprintf(config->kb_layouts, sizeof(config->kb_layouts), "us");
 }
 
 bool config_load_file(Config *config, const char *path) {

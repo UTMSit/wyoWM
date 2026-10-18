@@ -104,26 +104,39 @@ static void create_temp_texture(GLuint *tex, int w, int h) {
     glBindTexture(GL_TEXTURE_2D, 0);
 }
 
-static void ensure_temp_size(BlurContext *ctx, int w, int h) {
-    if (ctx->tex_w >= w && ctx->tex_h >= h) return;
+static void attach_fbo(GLuint *fbo, GLuint tex) {
+    glGenFramebuffers(1, fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, *fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0);
+}
+
+static void ensure_temp_size(BlurContext *ctx, int rw, int rh, int ds_w, int ds_h) {
+    if (ctx->tex_w == rw && ctx->tex_h == rh &&
+        ctx->ds_w == ds_w && ctx->ds_h == ds_h) {
+        return;
+    }
+    if (ctx->tex_full) glDeleteTextures(1, &ctx->tex_full);
     if (ctx->tex_a) glDeleteTextures(1, &ctx->tex_a);
     if (ctx->tex_b) glDeleteTextures(1, &ctx->tex_b);
+    if (ctx->fbo_full) glDeleteFramebuffers(1, &ctx->fbo_full);
     if (ctx->fbo_a) glDeleteFramebuffers(1, &ctx->fbo_a);
     if (ctx->fbo_b) glDeleteFramebuffers(1, &ctx->fbo_b);
+    ctx->tex_full = 0;
     ctx->tex_a = 0;
     ctx->tex_b = 0;
+    ctx->fbo_full = 0;
     ctx->fbo_a = 0;
     ctx->fbo_b = 0;
-    ctx->tex_w = w;
-    ctx->tex_h = h;
-    create_temp_texture(&ctx->tex_a, w, h);
-    create_temp_texture(&ctx->tex_b, w, h);
-    glGenFramebuffers(1, &ctx->fbo_a);
-    glBindFramebuffer(GL_FRAMEBUFFER, ctx->fbo_a);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, ctx->tex_a, 0);
-    glGenFramebuffers(1, &ctx->fbo_b);
-    glBindFramebuffer(GL_FRAMEBUFFER, ctx->fbo_b);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, ctx->tex_b, 0);
+    ctx->tex_w = rw;
+    ctx->tex_h = rh;
+    ctx->ds_w = ds_w;
+    ctx->ds_h = ds_h;
+    create_temp_texture(&ctx->tex_full, rw, rh);
+    create_temp_texture(&ctx->tex_a, ds_w, ds_h);
+    create_temp_texture(&ctx->tex_b, ds_w, ds_h);
+    attach_fbo(&ctx->fbo_full, ctx->tex_full);
+    attach_fbo(&ctx->fbo_a, ctx->tex_a);
+    attach_fbo(&ctx->fbo_b, ctx->tex_b);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
@@ -143,10 +156,14 @@ bool blur_init(BlurContext *ctx, int radius) {
     ctx->quad_vbo = 0;
     ctx->fbo_a = 0;
     ctx->fbo_b = 0;
+    ctx->fbo_full = 0;
     ctx->tex_a = 0;
     ctx->tex_b = 0;
+    ctx->tex_full = 0;
     ctx->tex_w = 0;
     ctx->tex_h = 0;
+    ctx->ds_w = 0;
+    ctx->ds_h = 0;
     compute_weights(ctx->weights, radius);
     GLuint vert = compile_shader(GL_VERTEX_SHADER, VERT_SRC);
     GLuint copy_frag = compile_shader(GL_FRAGMENT_SHADER, COPY_FRAG_SRC);
@@ -171,8 +188,16 @@ bool blur_init(BlurContext *ctx, int radius) {
     ctx->blur_u_tex = glGetUniformLocation(ctx->blur_prog, "u_tex");
     ctx->blur_u_texel = glGetUniformLocation(ctx->blur_prog, "u_texel");
     ctx->blur_u_dir = glGetUniformLocation(ctx->blur_prog, "u_dir");
-    ctx->blur_u_weights = glGetUniformLocation(ctx->blur_prog, "u_weights[0]");
     ctx->blur_u_uv_rect = glGetUniformLocation(ctx->blur_prog, "u_uv_rect");
+    ctx->blur_u_weights = glGetUniformLocation(ctx->blur_prog, "u_weights[0]");
+    if (ctx->blur_u_weights < 0) {
+        ctx->blur_u_weights = glGetUniformLocation(ctx->blur_prog, "u_weights");
+    }
+    if (ctx->blur_u_weights < 0) {
+        fprintf(stderr, "wyoWM blur: weights uniform not found\n");
+        blur_fini(ctx);
+        return false;
+    }
     static const float quad[] = { -1.0f, -1.0f, 1.0f, -1.0f, -1.0f, 1.0f, 1.0f, 1.0f };
     glGenBuffers(1, &ctx->quad_vbo);
     glBindBuffer(GL_ARRAY_BUFFER, ctx->quad_vbo);
@@ -188,103 +213,78 @@ void blur_fini(BlurContext *ctx) {
     if (ctx->copy_prog) glDeleteProgram(ctx->copy_prog);
     if (ctx->blur_prog) glDeleteProgram(ctx->blur_prog);
     if (ctx->quad_vbo) glDeleteBuffers(1, &ctx->quad_vbo);
+    if (ctx->tex_full) glDeleteTextures(1, &ctx->tex_full);
     if (ctx->tex_a) glDeleteTextures(1, &ctx->tex_a);
     if (ctx->tex_b) glDeleteTextures(1, &ctx->tex_b);
+    if (ctx->fbo_full) glDeleteFramebuffers(1, &ctx->fbo_full);
     if (ctx->fbo_a) glDeleteFramebuffers(1, &ctx->fbo_a);
     if (ctx->fbo_b) glDeleteFramebuffers(1, &ctx->fbo_b);
     ctx->copy_prog = 0;
     ctx->blur_prog = 0;
     ctx->quad_vbo = 0;
+    ctx->tex_full = 0;
     ctx->tex_a = 0;
     ctx->tex_b = 0;
+    ctx->fbo_full = 0;
     ctx->fbo_a = 0;
     ctx->fbo_b = 0;
     ctx->tex_w = 0;
     ctx->tex_h = 0;
+    ctx->ds_w = 0;
+    ctx->ds_h = 0;
     ctx->initialized = false;
 }
 
 void blur_apply_region(BlurContext *ctx, GLuint src_fbo, int src_w, int src_h,
                        int rx, int ry, int rw, int rh, int downsample) {
     if (!ctx || !ctx->initialized) return;
-
     if (rx < 0) { rw += rx; rx = 0; }
     if (ry < 0) { rh += ry; ry = 0; }
     if (rx + rw > src_w) rw = src_w - rx;
     if (ry + rh > src_h) rh = src_h - ry;
     if (rw <= 0 || rh <= 0) return;
-
     if (downsample < 1) downsample = 1;
-
     int ds_w = rw / downsample;
     int ds_h = rh / downsample;
     if (ds_w < 1) ds_w = 1;
     if (ds_h < 1) ds_h = 1;
-
-    ensure_temp_size(ctx, ds_w, ds_h);
-
+    ensure_temp_size(ctx, rw, rh, ds_w, ds_h);
     GLint old_fbo = 0;
     GLint old_viewport[4] = {0};
     glGetIntegerv(GL_FRAMEBUFFER_BINDING, &old_fbo);
     glGetIntegerv(GL_VIEWPORT, old_viewport);
     GLboolean old_blend = glIsEnabled(GL_BLEND);
     GLboolean old_scissor = glIsEnabled(GL_SCISSOR_TEST);
-
     glDisable(GL_BLEND);
     glDisable(GL_SCISSOR_TEST);
     glBindBuffer(GL_ARRAY_BUFFER, ctx->quad_vbo);
-
-    GLint src_tex = 0;
+    int gl_y = ry;
     glBindFramebuffer(GL_FRAMEBUFFER, src_fbo);
-    glGetFramebufferAttachmentParameteriv(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
-        GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME, &src_tex);
-
-    if (src_tex == 0) {
-        glBindBuffer(GL_ARRAY_BUFFER, 0);
-        if (old_blend) glEnable(GL_BLEND);
-        if (old_scissor) glEnable(GL_SCISSOR_TEST);
-        glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)old_fbo);
-        glViewport(old_viewport[0], old_viewport[1], old_viewport[2], old_viewport[3]);
-        return;
-    }
-
-    int gl_y = src_h - ry - rh;
-    if (gl_y < 0) gl_y = 0;
-    if (gl_y + rh > src_h) gl_y = src_h - rh;
-
-    float uv_x = (float)rx / (float)src_w;
-    float uv_y = (float)gl_y / (float)src_h;
-    float uv_w = (float)rw / (float)src_w;
-    float uv_h = (float)rh / (float)src_h;
-
+    glBindTexture(GL_TEXTURE_2D, ctx->tex_full);
+    glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, rx, gl_y, rw, rh);
     glUseProgram(ctx->copy_prog);
     glUniform1i(ctx->copy_u_tex, 0);
     glActiveTexture(GL_TEXTURE0);
-
     glBindFramebuffer(GL_FRAMEBUFFER, ctx->fbo_a);
     glViewport(0, 0, ds_w, ds_h);
-    glBindTexture(GL_TEXTURE_2D, (GLuint)src_tex);
-    glUniform4f(ctx->copy_u_uv_rect, uv_x, uv_y, uv_w, uv_h);
+    glBindTexture(GL_TEXTURE_2D, ctx->tex_full);
+    glUniform4f(ctx->copy_u_uv_rect, 0.0f, 0.0f, 1.0f, 1.0f);
     draw_quad();
-
     glUseProgram(ctx->blur_prog);
     glUniform1i(ctx->blur_u_tex, 0);
     glUniform1fv(ctx->blur_u_weights, BLUR_MAX_TAPS, ctx->weights);
     glUniform4f(ctx->blur_u_uv_rect, 0.0f, 0.0f, 1.0f, 1.0f);
     glUniform2f(ctx->blur_u_texel, 1.0f / (float)ds_w, 1.0f / (float)ds_h);
-
     glBindFramebuffer(GL_FRAMEBUFFER, ctx->fbo_b);
     glViewport(0, 0, ds_w, ds_h);
     glBindTexture(GL_TEXTURE_2D, ctx->tex_a);
     glUniform2f(ctx->blur_u_dir, 1.0f, 0.0f);
     draw_quad();
-
     glBindFramebuffer(GL_FRAMEBUFFER, ctx->fbo_a);
     glViewport(0, 0, ds_w, ds_h);
     glBindTexture(GL_TEXTURE_2D, ctx->tex_b);
     glUniform2f(ctx->blur_u_dir, 0.0f, 1.0f);
     draw_quad();
-
     glUseProgram(ctx->copy_prog);
     glUniform1i(ctx->copy_u_tex, 0);
     glBindFramebuffer(GL_FRAMEBUFFER, src_fbo);
@@ -292,10 +292,8 @@ void blur_apply_region(BlurContext *ctx, GLuint src_fbo, int src_w, int src_h,
     glBindTexture(GL_TEXTURE_2D, ctx->tex_a);
     glUniform4f(ctx->copy_u_uv_rect, 0.0f, 0.0f, 1.0f, 1.0f);
     draw_quad();
-
     glBindBuffer(GL_ARRAY_BUFFER, 0);
     glBindTexture(GL_TEXTURE_2D, 0);
-
     if (old_blend) glEnable(GL_BLEND);
     if (old_scissor) glEnable(GL_SCISSOR_TEST);
     glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)old_fbo);

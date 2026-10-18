@@ -1,0 +1,33 @@
+#!/bin/sh
+if [ -z "$WAYLAND_DISPLAY" ]; then
+	echo "Run inside a Wayland compositor with WAYLAND_DISPLAY set" >&2
+	exit 1
+fi
+
+rm -f /tmp/wyowm-nested.log /tmp/wyowm-spawn.log
+
+if [ -z "$XDG_RUNTIME_DIR" ]; then
+	XDG_RUNTIME_DIR="/run/user/$(id -u)"
+	export XDG_RUNTIME_DIR
+	mkdir -p "$XDG_RUNTIME_DIR"
+	chmod 700 "$XDG_RUNTIME_DIR"
+fi
+
+export XDG_SESSION_TYPE=wayland
+export XDG_SESSION_DESKTOP=wyoWM
+export XDG_CURRENT_DESKTOP=wyoWM
+export WYO_WAYLAND_DISPLAY=wayland-wyoWM-nested
+export WLR_BACKENDS=wayland
+export MOZ_ENABLE_WAYLAND=1
+export QT_QPA_PLATFORM="wayland;xcb"
+export GTK_CSD=0
+export QT_WAYLAND_DISABLE_WINDOWDECORATION=1
+export ELECTRON_OZONE_PLATFORM_HINT=wayland
+export _JAVA_AWT_WM_NONREPARENTING=1
+export XCURSOR_SIZE=24
+export XCURSOR_THEME=Adwaita
+export XCURSOR_PATH="$HOME/.local/share/icons:$HOME/.icons:/usr/share/icons:/usr/share/pixmaps"
+
+unset DISPLAY
+
+exec dbus-run-session /usr/local/bin/wyowm >/tmp/wyowm-nested.log 2>&1

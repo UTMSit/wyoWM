@@ -10,15 +10,10 @@
 static void handle_frame(struct wl_listener *listener, void *data) {
     Output *output = wl_container_of(listener, output, frame);
     (void)data;
-
     Server *server = output->server;
-
     if (server->shutting_down || !output->scene_output) return;
-
     int64_t now = animation_now_ms();
-
     bool active = false;
-
     View *view;
     wl_list_for_each(view, &server->views, link) {
         if (view->output == output) {
@@ -27,7 +22,6 @@ static void handle_frame(struct wl_listener *listener, void *data) {
             }
         }
     }
-
     if (output->wallpaper_fade_anim.active) {
         animation_update(&output->wallpaper_fade_anim, now);
         if (output->wallpaper_fade) {
@@ -41,13 +35,9 @@ static void handle_frame(struct wl_listener *listener, void *data) {
         }
         active = true;
     }
-
-    output_render_custom(output);
-
     if (!output_render_custom(output)) {
         return;
     }
-
     if (active) {
         wlr_output_schedule_frame(output->wlr_output);
     }
@@ -139,7 +129,6 @@ Output *output_create(Server *server, struct wlr_output *wlr_output) {
     output->wlr_output = wlr_output;
 
     wlr_output_init_render(wlr_output, server->allocator, server->renderer);
-    wlr_output_lock_software_cursors(wlr_output, true);
     if (!output_commit_enabled(wlr_output)) {
         free(output);
         return NULL;

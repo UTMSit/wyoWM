@@ -23,10 +23,14 @@ typedef struct BlurContext {
     GLuint quad_vbo;
     GLuint fbo_a;
     GLuint fbo_b;
+    GLuint fbo_full;
     GLuint tex_a;
     GLuint tex_b;
+    GLuint tex_full;
     int tex_w;
     int tex_h;
+    int ds_w;
+    int ds_h;
     float weights[BLUR_MAX_TAPS];
     int radius;
     bool initialized;

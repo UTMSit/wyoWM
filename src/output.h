@@ -38,6 +38,7 @@ typedef struct Output {
     struct wlr_buffer *wallpaper_buffer;
     struct wlr_scene_buffer *wallpaper_fade;
     AnimatedValue wallpaper_fade_anim;
+    bool render_pending;
 } Output;
 
 Output *output_create(struct Server *server, struct wlr_output *wlr_output);

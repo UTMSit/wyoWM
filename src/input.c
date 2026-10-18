@@ -153,9 +153,10 @@ static void focus_output_direction(Server *server, int dir) {
 			server->cursor,
 			NULL,
 			target->x + target->width / 2,
-			target->y + target->height / 2
-		);
-	}
+            target->y + target->height / 2
+        );
+        input_mark_cursor_output(server);
+    }
 	server_focus_view(server, NULL);
 	wlr_seat_pointer_clear_focus(server->seat);
 	wlr_seat_keyboard_notify_clear_focus(server->seat);
@@ -468,6 +469,11 @@ static View *view_from_surface(Server *server, struct wlr_surface *surface) {
             view->xdg.xdg_surface->surface == root) {
             return view;
         }
+        #if defined(WYO_HAS_XWAYLAND)
+                else if (view->type == VIEW_TYPE_XWAYLAND && view->xwayland.xsurface && view->xwayland.xsurface->surface == root) {
+                    return view;
+                }
+        #endif
     }
 
     return NULL;
@@ -652,6 +658,14 @@ static void process_cursor(Server *server, uint64_t time_msec) {
     server->cursor_restore_pending = false;
 }
 
+void input_mark_cursor_output(Server *server) {
+    if (!server || !server->cursor) return;
+    Output *out = output_at(server, server->cursor->x, server->cursor->y);
+    if (!out || !out->wlr_output) return;
+    out->render_pending = true;
+    wlr_output_schedule_frame(out->wlr_output);
+}
+
 static void process_drag(Server *server) {
     if (!server->drag.active || !server->drag.view) {
         server->drag.active = false;
@@ -774,7 +788,7 @@ static void handle_start_drag(struct wl_listener *listener, void *data) {
     wl_signal_add(&drag->events.destroy, &server->drag_destroy);
 
     if (drag->icon && drag->icon->surface) {
-        server->drag_icon_tree = wlr_scene_tree_create(&server->scene->tree);
+        server->drag_icon_tree = wlr_scene_tree_create(server->scene_tree);
         if (server->drag_icon_tree) {
             wlr_scene_subsurface_tree_create(server->drag_icon_tree, drag->icon->surface);
             wlr_scene_node_raise_to_top(&server->drag_icon_tree->node);
@@ -851,21 +865,22 @@ static void handle_cursor_motion(struct wl_listener *listener, void *data) {
     }
 
     if (server->drag.active) {
-		process_drag(server);
-	} else if (server->dnd_active) {
-		double sx = 0.0;
-		double sy = 0.0;
-		struct wlr_surface *surface = surface_at_cursor(server, &sx, &sy);
-		if (surface) {
-			wlr_seat_pointer_notify_enter(server->seat, surface, sx, sy);
-			wlr_seat_pointer_notify_motion(server->seat, event->time_msec, sx, sy);
-		} else {
-			wlr_seat_pointer_clear_focus(server->seat);
-		}
-		wlr_seat_pointer_notify_frame(server->seat);
-	} else {
-		process_cursor(server, event->time_msec);
-	}
+        process_drag(server);
+    } else if (server->dnd_active) {
+        double sx = 0.0;
+        double sy = 0.0;
+        struct wlr_surface *surface = surface_at_cursor(server, &sx, &sy);
+        if (surface) {
+            wlr_seat_pointer_notify_enter(server->seat, surface, sx, sy);
+            wlr_seat_pointer_notify_motion(server->seat, event->time_msec, sx, sy);
+        } else {
+            wlr_seat_pointer_clear_focus(server->seat);
+        }
+        wlr_seat_pointer_notify_frame(server->seat);
+    } else {
+        process_cursor(server, event->time_msec);
+    }
+    input_mark_cursor_output(server);
 }
 
 static void handle_cursor_motion_absolute(struct wl_listener *listener, void *data) {
@@ -905,21 +920,22 @@ static void handle_cursor_motion_absolute(struct wl_listener *listener, void *da
     }
 
     if (server->drag.active) {
-		process_drag(server);
-	} else if (server->dnd_active) {
-		double sx = 0.0;
-		double sy = 0.0;
-		struct wlr_surface *surface = surface_at_cursor(server, &sx, &sy);
-		if (surface) {
-			wlr_seat_pointer_notify_enter(server->seat, surface, sx, sy);
-			wlr_seat_pointer_notify_motion(server->seat, event->time_msec, sx, sy);
-		} else {
-			wlr_seat_pointer_clear_focus(server->seat);
-		}
-		wlr_seat_pointer_notify_frame(server->seat);
-	} else {
-		process_cursor(server, event->time_msec);
-	}
+        process_drag(server);
+    } else if (server->dnd_active) {
+        double sx = 0.0;
+        double sy = 0.0;
+        struct wlr_surface *surface = surface_at_cursor(server, &sx, &sy);
+        if (surface) {
+            wlr_seat_pointer_notify_enter(server->seat, surface, sx, sy);
+            wlr_seat_pointer_notify_motion(server->seat, event->time_msec, sx, sy);
+        } else {
+            wlr_seat_pointer_clear_focus(server->seat);
+        }
+        wlr_seat_pointer_notify_frame(server->seat);
+    } else {
+        process_cursor(server, event->time_msec);
+    }
+    input_mark_cursor_output(server);
 }
 
 static bool surface_allows_keyboard(Server *server, struct wlr_surface *surface) {
@@ -1363,10 +1379,12 @@ static void handle_new_input(struct wl_listener *listener, void *data) {
         wlr_cursor_attach_input_device(server->cursor, device);
     }
 
-    wlr_seat_set_capabilities(
-        server->seat,
-        WL_SEAT_CAPABILITY_KEYBOARD | WL_SEAT_CAPABILITY_POINTER
-    );
+    uint32_t caps = WL_SEAT_CAPABILITY_POINTER;
+    if (!wl_list_empty(&server->keyboards)) {
+        caps |= WL_SEAT_CAPABILITY_KEYBOARD;
+    }
+
+    wlr_seat_set_capabilities(server->seat, caps);
 }
 
 static void handle_cursor_axis(struct wl_listener *listener, void *data) {

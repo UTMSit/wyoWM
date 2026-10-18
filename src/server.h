@@ -27,6 +27,11 @@
 #include <wlr/types/wlr_xdg_output_manager_v1.h>
 #endif
 
+#if __has_include(<wlr/xwayland.h>)
+#include <wlr/xwayland.h>
+#define WYO_HAS_XWAYLAND 1
+#endif
+
 #if __has_include(<wlr/types/wlr_foreign_toplevel_management_v1.h>)
 #include <wlr/types/wlr_foreign_toplevel_management_v1.h>
 #define WYO_HAS_FOREIGN_TOPLEVEL 1
@@ -139,6 +144,12 @@ typedef struct Server {
     #endif
 
     struct wlr_xdg_decoration_manager_v1 *xdg_decoration_manager;
+    #if defined(WYO_HAS_XWAYLAND)
+        struct wlr_xwayland *xwayland;
+        struct wl_listener xwayland_ready;
+        struct wl_listener xwayland_new_surface;
+        struct wl_listener xwayland_destroy;
+    #endif
     struct wl_listener new_xdg_decoration;
     struct wl_listener request_set_selection;
     struct wl_listener request_set_cursor;

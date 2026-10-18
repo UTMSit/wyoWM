@@ -470,10 +470,21 @@ static bool render_with_blur(struct Output *output, BlurRect *rects, int num_rec
     return ok;
 }
 
+static bool output_has_fullscreen_view(Output *output) {
+	View *view;
+	wl_list_for_each(view, &output->server->views, link) {
+		if (view->output == output && view->mapped && view->fullscreen) {
+			return true;
+		}
+	}
+	return false;
+}
+
 bool output_render_custom(struct Output *output) {
     if (!output || !output->wlr_output || !output->server) return false;
     struct wlr_output *wlr_output = output->wlr_output;
-    if (!wlr_output->needs_frame) return false;
+    if (!wlr_output->needs_frame && !output->render_pending) return false;
+    output->render_pending = false;
     Server *server = output->server;
 
     if (!g_blur_tried) {
@@ -494,7 +505,7 @@ bool output_render_custom(struct Output *output) {
             -output->x, -output->y, rects, MAX_BLUR_RECTS, 0);
     }
 
-    if (num_rects > 0 && g_blur.initialized) {
+    if (num_rects > 0 && g_blur.initialized && !output_has_fullscreen_view(output)) {
         return render_with_blur(output, rects, num_rects);
     }
     return render_direct(output);
