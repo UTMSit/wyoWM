@@ -65,6 +65,9 @@ typedef struct View {
     AnimatedValue opacity;
     AnimatedValue anim_x;
     AnimatedValue anim_y;
+    AnimatedValue anim_w;
+    AnimatedValue anim_h;
+    AnimatedValue anim_scale;
 
     union {
         struct {

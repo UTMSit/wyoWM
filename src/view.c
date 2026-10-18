@@ -11,6 +11,7 @@
 
 static void handle_map(struct wl_listener *listener, void *data);
 static void handle_unmap(struct wl_listener *listener, void *data);
+static void view_play_open_animation(View *view);
 static void handle_destroy(struct wl_listener *listener, void *data);
 static void handle_commit(struct wl_listener *listener, void *data);
 static void handle_toplevel_destroy(struct wl_listener *listener, void *data);
@@ -437,14 +438,66 @@ static void view_schedule_frame(View *view) {
 static const float fallback_border_focused[4] = { 0.4f, 0.6f, 1.0f, 1.0f };
 static const float fallback_border_unfocused[4] = { 0.3f, 0.3f, 0.35f, 1.0f };
 
+static struct wlr_scene_buffer *view_find_surface_buffer(View *view) {
+	if (!view || !view->scene_tree) return NULL;
+
+	struct wlr_surface *root = NULL;
+	if (view->type == VIEW_TYPE_XDG && view->xdg.xdg_surface) {
+		root = view->xdg.xdg_surface->surface;
+	}
+#if defined(WYO_HAS_XWAYLAND)
+	else if (view->type == VIEW_TYPE_XWAYLAND && view->xwayland.xsurface) {
+		root = view->xwayland.xsurface->surface;
+	}
+#endif
+	if (!root) return NULL;
+
+	struct wlr_scene_node *child;
+	wl_list_for_each(child, &view->scene_tree->children, link) {
+		if (child->type != WLR_SCENE_NODE_BUFFER) continue;
+		struct wlr_scene_buffer *sb = wlr_scene_buffer_from_node(child);
+		struct wlr_scene_surface *ss = wlr_scene_surface_try_from_buffer(sb);
+		if (ss && ss->surface == root) return sb;
+	}
+
+	return NULL;
+}
+
+static void view_visual_size(View *view, int *w_out, int *h_out) {
+	double s = view->anim_scale.current;
+	if (s < 0.01) s = 0.01;
+	double bw = view->anim_w.current;
+	double bh = view->anim_h.current;
+	if (bw <= 0.0) bw = (double)view->width;
+	if (bh <= 0.0) bh = (double)view->height;
+	*w_out = (int)lround(bw * s);
+	*h_out = (int)lround(bh * s);
+	if (*w_out < 1) *w_out = 1;
+	if (*h_out < 1) *h_out = 1;
+}
+
 static void view_apply_geometry(View *view) {
 	if (!view || !view->root_tree) return;
-	int x = (int)lround(view->anim_x.current);
-	int y = (int)lround(view->anim_y.current);
+
+	int vw = 0;
+	int vh = 0;
+	view_visual_size(view, &vw, &vh);
+
+	double s = view->anim_scale.current;
+	if (s < 0.01) s = 0.01;
+
+	int x = (int)lround(view->anim_x.current + (view->anim_w.current - vw) * 0.5);
+	int y = (int)lround(view->anim_y.current + (view->anim_h.current - vh) * 0.5);
+
 	int old_x = view->root_tree->node.x;
 	int old_y = view->root_tree->node.y;
 	if (x != old_x || y != old_y) {
 		wlr_scene_node_set_position(&view->root_tree->node, x, y);
+	}
+
+	struct wlr_scene_buffer *sb = view_find_surface_buffer(view);
+	if (sb && sb->buffer) {
+		wlr_scene_buffer_set_dest_size(sb, vw, vh);
 	}
 }
 
@@ -485,15 +538,9 @@ static void view_update_border(View *view) {
 		}
 	}
 	if (!enabled) return;
-	int w = view->width;
-	int h = view->height;
-	if (view->type == VIEW_TYPE_XDG && view->xdg.xdg_surface) {
-		struct wlr_box geo = view->xdg.xdg_surface->current.geometry;
-		if (geo.width > 0 && geo.height > 0) {
-			w = geo.width;
-			h = geo.height;
-		}
-	}
+	int w = 0;
+	int h = 0;
+	view_visual_size(view, &w, &h);
 	int radius = 0;
 	if (view->server && corner_radius_supported()) {
 		radius = (int)lround(view->server->config.corner_radius);
@@ -590,14 +637,21 @@ static void handle_xwayland_dissociate(struct wl_listener *listener, void *data)
 }
 
 static void handle_xwayland_map(struct wl_listener *listener, void *data) {
-    View *view = wl_container_of(listener, view, xwayland.map);
-    (void)data;
-    if (!view || !view->server || view->server->shutting_down) return;
-    view->mapped = true;
-    if (view->scene_tree) {
-        wlr_scene_node_set_enabled(&view->scene_tree->node, true);
-    }
-    server_view_mapped(view->server, view);
+	View *view = wl_container_of(listener, view, xwayland.map);
+	(void)data;
+	if (!view || !view->server || view->server->shutting_down) return;
+
+	view->mapped = true;
+
+	animation_set_target(&view->opacity, 0.0, 0, EASING_LINEAR, NULL);
+	view_apply_opacity(view);
+
+	if (view->scene_tree) {
+		wlr_scene_node_set_enabled(&view->scene_tree->node, true);
+	}
+
+	server_view_mapped(view->server, view);
+	view_play_open_animation(view);
 }
 
 static void handle_xwayland_unmap(struct wl_listener *listener, void *data) {
@@ -691,11 +745,14 @@ View *view_create_xwayland(Server *server, struct wlr_xwayland_surface *xsurface
         if (!view->border[i]) { wlr_scene_node_destroy(&view->root_tree->node); free(view); return NULL; }
         wlr_scene_node_set_enabled(&view->border[i]->node, false);
     }
-    animation_init(&view->opacity, 1.0);
+    animation_init(&view->opacity, 0.0);
     animation_init(&view->anim_x, 0.0);
     animation_init(&view->anim_y, 0.0);
+    animation_init(&view->anim_w, 0.0);
+    animation_init(&view->anim_h, 0.0);
+    animation_init(&view->anim_scale, 1.0);
     animation_init(&view->border_blend, 0.0);
-   	xsurface->data = view;
+    xsurface->data = view;
 	wl_list_init(&view->link);
 	wl_list_init(&view->scene_node_destroy.link);
 	wl_list_init(&view->decoration_destroy.link);
@@ -779,11 +836,13 @@ View *view_create_xdg(Server *server, struct wlr_xdg_surface *xdg_surface, struc
         return NULL;
     }
 
-    animation_init(&view->opacity, 1.0);
+    animation_init(&view->opacity, 0.0);
     animation_init(&view->anim_x, 0.0);
     animation_init(&view->anim_y, 0.0);
+    animation_init(&view->anim_w, 0.0);
+    animation_init(&view->anim_h, 0.0);
+    animation_init(&view->anim_scale, 1.0);
     animation_init(&view->border_blend, 0.0);
-
     xdg_surface->data = view;
     wl_list_init(&view->link);
     wl_list_init(&view->scene_node_destroy.link);
@@ -1031,93 +1090,115 @@ void view_update_scene_parent(View *view) {
 }
 
 void view_set_geometry(View *view, int x, int y, int width, int height) {
-    if (!view || width <= 0 || height <= 0) return;
+	if (!view) return;
 
-    int offset_x = 0;
-    int offset_y = 0;
-    if (view->output) {
-        offset_x = view->output->x;
-        offset_y = view->output->y;
-    }
+	int offset_x = 0;
+	int offset_y = 0;
+	if (view->output) {
+		offset_x = view->output->x;
+		offset_y = view->output->y;
+	}
 
-    int new_x = x + offset_x;
-    int new_y = y + offset_y;
+	int new_x = x + offset_x;
+	int new_y = y + offset_y;
 
-    bool size_changed = view->width != width || view->height != height;
-    bool pos_changed = view->x != new_x || view->y != new_y;
-    bool first = view->target_width <= 0 || view->target_height <= 0;
+	int old_x = view->x;
+	int old_y = view->y;
+	int old_width = view->width;
+	int old_height = view->height;
 
-    view->x = new_x;
-    view->y = new_y;
-    view->width = width;
-    view->height = height;
+	bool size_changed = old_width != width || old_height != height;
+	bool target_pos_changed = old_x != new_x || old_y != new_y;
+	bool first = view->target_width <= 0 || view->target_height <= 0;
 
-    view->target_x = new_x;
-    view->target_y = new_y;
-    view->target_width = width;
-    view->target_height = height;
+	int visual_x = (int)lround(view->anim_x.current);
+	int visual_y = (int)lround(view->anim_y.current);
+	int visual_w = (int)lround(view->anim_w.current);
+	int visual_h = (int)lround(view->anim_h.current);
+	bool visual_changed = visual_x != new_x || visual_y != new_y || visual_w != width || visual_h != height;
+	bool anim_running = view->anim_x.active || view->anim_y.active || view->anim_w.active || view->anim_h.active;
 
-    int duration = 160;
+	view->x = new_x;
+	view->y = new_y;
+	view->width = width;
+	view->height = height;
+	view->target_x = new_x;
+	view->target_y = new_y;
+	view->target_width = width;
+	view->target_height = height;
+
+	int duration = 160;
 	EasingCurve curve = EASING_EASE_OUT;
 	const BezierCurve *bezier = NULL;
+
 	if (view->server) {
 		for (int i = 0; i < view->server->config.anim_rule_count; i++) {
-			if (strcmp(view->server->config.anim_rules[i].type, "windows") == 0 && view->server->config.anim_rules[i].enabled) {
+			if (strcmp(view->server->config.anim_rules[i].type, "windows") == 0 &&
+				view->server->config.anim_rules[i].enabled) {
 				duration = view->server->config.anim_rules[i].duration_ms;
 				for (int j = 0; j < view->server->config.bezier_count; j++) {
-					if (strcmp(view->server->config.beziers[j].name, view->server->config.anim_rules[i].curve_name) == 0) {
+					if (strcmp(view->server->config.beziers[j].name,
+							   view->server->config.anim_rules[i].curve_name) == 0) {
 						bezier = &view->server->config.beziers[j].curve;
 						curve = EASING_BEZIER;
 						break;
 					}
 				}
-				if (!bezier) curve = (EasingCurve)view->server->config.anim_window_curve;
+				if (!bezier) {
+					curve = (EasingCurve)view->server->config.anim_window_curve;
+				}
 				break;
 			}
 		}
 	}
-	if (duration < 0) duration = 0;
+
+	if (duration < 0) {
+		duration = 0;
+	}
+
 	bool animate = false;
-	if (duration > 0 &&
-		view->mapped &&
-		!first &&
-		(pos_changed || size_changed) &&
-		!view->dragging) {
-		animate = true;
+	if (duration > 0 && view->mapped && !first && !view->dragging) {
+		if (target_pos_changed || size_changed || visual_changed) {
+			animate = true;
+		}
 		if (view->server &&
 			(view->server->shutting_down || view->server->drag.view == view)) {
 			animate = false;
 		}
 	}
+
 	if (animate) {
 		animation_set_target(&view->anim_x, (double)new_x, duration, curve, bezier);
 		animation_set_target(&view->anim_y, (double)new_y, duration, curve, bezier);
+		animation_set_target(&view->anim_w, (double)width, duration, curve, bezier);
+		animation_set_target(&view->anim_h, (double)height, duration, curve, bezier);
 		if (view->output) {
 			wlr_output_schedule_frame(view->output->wlr_output);
 		}
-	} else {
+	} else if (visual_changed || !anim_running) {
 		animation_set_target(&view->anim_x, (double)new_x, 0, EASING_LINEAR, NULL);
 		animation_set_target(&view->anim_y, (double)new_y, 0, EASING_LINEAR, NULL);
+		animation_set_target(&view->anim_w, (double)width, 0, EASING_LINEAR, NULL);
+		animation_set_target(&view->anim_h, (double)height, 0, EASING_LINEAR, NULL);
 	}
 
-    if (view->type == VIEW_TYPE_XDG &&
-        view->xdg.toplevel &&
-        view->xdg.xdg_surface &&
-        view->xdg.xdg_surface->initialized &&
-        size_changed) {
-        wlr_xdg_toplevel_set_size(view->xdg.toplevel, width, height);
-    }
+	if (view->type == VIEW_TYPE_XDG &&
+		view->xdg.toplevel &&
+		view->xdg.xdg_surface &&
+		view->xdg.xdg_surface->initialized &&
+		size_changed) {
+		wlr_xdg_toplevel_set_size(view->xdg.toplevel, width, height);
+	}
+#if defined(WYO_HAS_XWAYLAND)
+	else if (view->type == VIEW_TYPE_XWAYLAND &&
+			 view->xwayland.xsurface &&
+			 view->xwayland.xsurface->surface &&
+			 size_changed) {
+		wlr_xwayland_surface_configure(view->xwayland.xsurface, view->x, view->y, width, height);
+	}
+#endif
 
-    #if defined(WYO_HAS_XWAYLAND)
-        else if (view->type == VIEW_TYPE_XWAYLAND &&
-                 view->xwayland.xsurface &&
-                 view->xwayland.xsurface->surface &&
-                 size_changed) {
-            wlr_xwayland_surface_configure(view->xwayland.xsurface, view->x, view->y, width, height);
-        }
-    #endif
-
-    view_apply_geometry(view);
+	view_apply_geometry(view);
 	view_update_border(view);
 	view_foreign_sync(view);
 	view_update_scene_parent(view);
@@ -1269,37 +1350,90 @@ static void check_sticky(View *view) {
 	}
 }
 
-static void handle_map(struct wl_listener *listener, void *data) {
-    View *view = wl_container_of(listener, view, xdg.map);
-    (void)data;
-    if (!view || !view->server || view->server->shutting_down) return;
-    view->mapped = true;
-    if (view->scene_tree) {
-        wlr_scene_node_set_enabled(&view->scene_tree->node, true);
-    }
+static void view_play_open_animation(View *view) {
+	if (!view || !view->server || view->server->shutting_down) return;
 
-   	int duration = view->server->config.anim_opacity_duration_ms;
-	EasingCurve curve = (EasingCurve)view->server->config.anim_opacity_curve;
-	if (duration < 0) duration = 0;
-	if (duration > 0) {
-		double target_opacity = view->server->config.active_opacity;
-		if (target_opacity < 0.0) target_opacity = 0.0;
-		if (target_opacity > 1.0) target_opacity = 1.0;
-		animation_set_target(&view->opacity, 0.0, 0, EASING_LINEAR, NULL);
-		view_apply_opacity(view);
-		animation_set_target(&view->opacity, target_opacity, duration, curve, NULL);
+	double target_opacity = view->server->config.active_opacity;
+	if (view->server->focused_view != view) {
+		target_opacity = view->server->config.inactive_opacity;
+	}
+	if (target_opacity < 0.0) target_opacity = 0.0;
+	if (target_opacity > 1.0) target_opacity = 1.0;
+
+	int fade_ms = 250;
+	int win_ms = 208;
+	EasingCurve fade_curve = EASING_EASE_OUT;
+	EasingCurve win_curve = EASING_EASE_OUT;
+	const BezierCurve *fade_bez = NULL;
+	const BezierCurve *win_bez = NULL;
+
+	for (int i = 0; i < view->server->config.anim_rule_count; i++) {
+		const ConfigAnimRule *rule = &view->server->config.anim_rules[i];
+		if (!rule->enabled) continue;
+
+		if (strcmp(rule->type, "fade") == 0) {
+			fade_ms = rule->duration_ms;
+			for (int j = 0; j < view->server->config.bezier_count; j++) {
+				if (strcmp(view->server->config.beziers[j].name, rule->curve_name) == 0) {
+					fade_bez = &view->server->config.beziers[j].curve;
+					fade_curve = EASING_BEZIER;
+					break;
+				}
+			}
+		} else if (strcmp(rule->type, "windows") == 0) {
+			win_ms = rule->duration_ms;
+			for (int j = 0; j < view->server->config.bezier_count; j++) {
+				if (strcmp(view->server->config.beziers[j].name, rule->curve_name) == 0) {
+					win_bez = &view->server->config.beziers[j].curve;
+					win_curve = EASING_BEZIER;
+					break;
+				}
+			}
+		}
 	}
 
-    server_view_mapped(view->server, view);
+	if (fade_ms < 0) fade_ms = 0;
+	if (win_ms < 0) win_ms = 0;
+
+	animation_set_target(&view->opacity, 0.0, 0, EASING_LINEAR, NULL);
+	view_apply_opacity(view);
+
+	animation_set_target(&view->anim_scale, 0.92, 0, EASING_LINEAR, NULL);
+	view_apply_geometry(view);
+
+	animation_set_target(&view->opacity, target_opacity, fade_ms, fade_curve, fade_bez);
+	animation_set_target(&view->anim_scale, 1.0, win_ms, win_curve, win_bez);
+
+	if (view->output) {
+		wlr_output_schedule_frame(view->output->wlr_output);
+	}
+}
+
+static void handle_map(struct wl_listener *listener, void *data) {
+	View *view = wl_container_of(listener, view, xdg.map);
+	(void)data;
+	if (!view || !view->server || view->server->shutting_down) return;
+
+	view->mapped = true;
+
+	animation_set_target(&view->opacity, 0.0, 0, EASING_LINEAR, NULL);
+	view_apply_opacity(view);
+
+	if (view->scene_tree) {
+		wlr_scene_node_set_enabled(&view->scene_tree->node, true);
+	}
+
+	server_view_mapped(view->server, view);
 
 	if (view->xdg.toplevel && view->xdg.toplevel->requested.fullscreen && !view->fullscreen) {
 		view_toggle_fullscreen(view);
 	}
 
 	view_foreign_create(view);
-    view_foreign_sync(view);
-    view_refresh_decorations(view);
-    check_sticky(view);
+	view_foreign_sync(view);
+	view_refresh_decorations(view);
+	check_sticky(view);
+	view_play_open_animation(view);
 }
 
 static void handle_unmap(struct wl_listener *listener, void *data) {
@@ -1491,12 +1625,16 @@ bool view_frame_update(View *view, int64_t now_ms) {
 
     bool active = false;
 
-    if (view->anim_x.active || view->anim_y.active) {
-        animation_update(&view->anim_x, now_ms);
-        animation_update(&view->anim_y, now_ms);
-        view_apply_geometry(view);
-        active = true;
-    }
+   	if (view->anim_x.active || view->anim_y.active || view->anim_w.active || view->anim_h.active || view->anim_scale.active) {
+		animation_update(&view->anim_x, now_ms);
+		animation_update(&view->anim_y, now_ms);
+		animation_update(&view->anim_w, now_ms);
+		animation_update(&view->anim_h, now_ms);
+		animation_update(&view->anim_scale, now_ms);
+		view_apply_geometry(view);
+		view_update_border(view);
+		active = true;
+	}
 
     if (view->opacity.active) {
         animation_update(&view->opacity, now_ms);

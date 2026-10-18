@@ -432,8 +432,12 @@ static int collect_blur_rects(
 		if (view && view->mapped && view->root_tree && view->width > 0 && view->height > 0) {
 			cx = view->root_tree->node.x - output->x;
 			cy = view->root_tree->node.y - output->y;
-			w = view->width;
-			h = view->height;
+			w = view->root_tree->node.x + (int)lround(view->anim_w.current * view->anim_scale.current) - cx;
+			h = view->root_tree->node.y + (int)lround(view->anim_h.current * view->anim_scale.current) - cy;
+			w = (int)lround(view->anim_w.current * view->anim_scale.current);
+			h = (int)lround(view->anim_h.current * view->anim_scale.current);
+			if (w <= 0) w = view->width;
+			if (h <= 0) h = view->height;
 
 			for (int i = 0; i < 4; i++) {
 				blur_add_border(view->border[i]);
