@@ -20,6 +20,13 @@
 
 #define BIND_MODIFIER_MASK (WLR_MODIFIER_SHIFT | WLR_MODIFIER_CTRL | WLR_MODIFIER_ALT | WLR_MODIFIER_LOGO)
 
+static inline void listener_remove(struct wl_listener *listener) {
+    if (!wl_list_empty(&listener->link)) {
+        wl_list_remove(&listener->link);
+        wl_list_init(&listener->link);
+    }
+}
+
 static void direction_to_delta(int dir, int *dx, int *dy) {
     if (dx) *dx = 0;
     if (dy) *dy = 0;
@@ -745,26 +752,16 @@ static void process_drag(Server *server) {
 static void handle_drag_destroy(struct wl_listener *listener, void *data) {
     Server *server = wl_container_of(listener, server, drag_destroy);
     (void)data;
-
     if (server->drag_icon_tree) {
         wlr_scene_node_destroy(&server->drag_icon_tree->node);
         server->drag_icon_tree = NULL;
     }
-
     server->dnd_active = false;
     server->dnd_drag = NULL;
-
-    wl_list_remove(&server->drag_focus.link);
-    wl_list_init(&server->drag_focus.link);
-
-    wl_list_remove(&server->drag_motion.link);
-    wl_list_init(&server->drag_motion.link);
-
-    wl_list_remove(&server->drag_drop.link);
-    wl_list_init(&server->drag_drop.link);
-
-    wl_list_remove(&server->drag_destroy.link);
-    wl_list_init(&server->drag_destroy.link);
+    listener_remove(&server->drag_focus);
+    listener_remove(&server->drag_motion);
+    listener_remove(&server->drag_drop);
+    listener_remove(&server->drag_destroy);
 }
 
 static void handle_drag_motion(struct wl_listener *listener, void *data) {
@@ -1292,18 +1289,17 @@ static void handle_keyboard_destroy(struct wl_listener *listener, void *data) {
     Keyboard *keyboard = wl_container_of(listener, keyboard, destroy);
     Server *server = keyboard->server;
     (void)data;
-
-    wl_list_remove(&keyboard->key.link);
-    wl_list_remove(&keyboard->modifiers.link);
-    wl_list_remove(&keyboard->destroy.link);
-    wl_list_remove(&keyboard->link);
-
+    listener_remove(&keyboard->key);
+    listener_remove(&keyboard->modifiers);
+    listener_remove(&keyboard->destroy);
+    if (!wl_list_empty(&keyboard->link)) {
+        wl_list_remove(&keyboard->link);
+        wl_list_init(&keyboard->link);
+    }
     if (server->active_keyboard == keyboard->wlr_keyboard) {
         server->active_keyboard = NULL;
     }
-
     wlr_seat_set_keyboard(server->seat, NULL);
-
     free(keyboard);
 }
 
@@ -1564,40 +1560,31 @@ void input_init(Server *server) {
 }
 
 void input_destroy(Server *server) {
-    wl_list_remove(&server->new_input.link);
-
-    wl_list_remove(&server->cursor_motion.link);
-    wl_list_remove(&server->cursor_motion_absolute.link);
-    wl_list_remove(&server->cursor_button.link);
-    wl_list_remove(&server->cursor_axis.link);
-
+    listener_remove(&server->new_input);
+    listener_remove(&server->cursor_motion);
+    listener_remove(&server->cursor_motion_absolute);
+    listener_remove(&server->cursor_button);
+    listener_remove(&server->cursor_axis);
     Keyboard *keyboard;
     Keyboard *tmp;
-
     wl_list_for_each_safe(keyboard, tmp, &server->keyboards, link) {
-        wl_list_remove(&keyboard->key.link);
-        wl_list_remove(&keyboard->modifiers.link);
-        wl_list_remove(&keyboard->destroy.link);
+        listener_remove(&keyboard->key);
+        listener_remove(&keyboard->modifiers);
+        listener_remove(&keyboard->destroy);
         wl_list_remove(&keyboard->link);
+        wl_list_init(&keyboard->link);
         free(keyboard);
     }
-
     wl_list_init(&server->keyboards);
     server->active_keyboard = NULL;
-   	wl_list_remove(&server->request_start_drag.link);
-	wl_list_remove(&server->start_drag.link);
+    listener_remove(&server->request_start_drag);
+    listener_remove(&server->start_drag);
     wlr_seat_set_keyboard(server->seat, NULL);
-
-    if (!wl_list_empty(&server->request_set_cursor.link)) {
-        wl_list_remove(&server->request_set_cursor.link);
-        wl_list_init(&server->request_set_cursor.link);
-    }
-
+    listener_remove(&server->request_set_cursor);
     if (server->cursor) {
         wlr_cursor_destroy(server->cursor);
         server->cursor = NULL;
     }
-
     if (server->xcursor_manager) {
         wlr_xcursor_manager_destroy(server->xcursor_manager);
         server->xcursor_manager = NULL;

@@ -68,7 +68,10 @@ if (layer->layer_surface) {
 layer->layer_surface->data = NULL;
 layer->layer_surface = NULL;
 }
-wl_list_remove(&layer->link);
+if (!wl_list_empty(&layer->link)) {
+    wl_list_remove(&layer->link);
+    wl_list_init(&layer->link);
+}
 free(layer);
 }
 
@@ -164,7 +167,10 @@ void layer_shell_destroy(Server *server) {
             layer->layer_surface = NULL;
         }
 
-        wl_list_remove(&layer->link);
+        if (!wl_list_empty(&layer->link)) {
+            wl_list_remove(&layer->link);
+            wl_list_init(&layer->link);
+        }
         free(layer);
     }
 

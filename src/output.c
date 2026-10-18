@@ -3,17 +3,28 @@
 #include "view.h"
 #include "wallpaper.h"
 #include <stdlib.h>
+#include <stdio.h>
 #include <time.h>
 #include <wlr/util/box.h>
 #include "render.h"
+
+static inline void listener_remove(struct wl_listener *listener) {
+    if (!wl_list_empty(&listener->link)) {
+        wl_list_remove(&listener->link);
+        wl_list_init(&listener->link);
+    }
+}
 
 static void handle_frame(struct wl_listener *listener, void *data) {
     Output *output = wl_container_of(listener, output, frame);
     (void)data;
     Server *server = output->server;
+
     if (server->shutting_down || !output->scene_output) return;
+
     int64_t now = animation_now_ms();
     bool active = false;
+
     View *view;
     wl_list_for_each(view, &server->views, link) {
         if (view->output == output) {
@@ -22,11 +33,14 @@ static void handle_frame(struct wl_listener *listener, void *data) {
             }
         }
     }
+
     if (output->wallpaper_fade_anim.active) {
         animation_update(&output->wallpaper_fade_anim, now);
+
         if (output->wallpaper_fade) {
             wlr_scene_buffer_set_opacity(output->wallpaper_fade, (float)output->wallpaper_fade_anim.current);
         }
+
         if (animation_finished(&output->wallpaper_fade_anim)) {
             if (output->wallpaper_fade) {
                 wlr_scene_node_destroy(&output->wallpaper_fade->node);
@@ -35,18 +49,17 @@ static void handle_frame(struct wl_listener *listener, void *data) {
         }
         active = true;
     }
+
     if (output_has_fullscreen_view(output)) {
-		wlr_scene_output_commit(output->scene_output, NULL);
-		struct timespec now;
-		clock_gettime(CLOCK_MONOTONIC, &now);
-		wlr_scene_output_send_frame_done(output->scene_output, &now);
-	} else {
-		if (!output_render_custom(output)) {
-			return;
-		}
-	}
-    if (active) {
-        wlr_output_schedule_frame(output->wlr_output);
+        wlr_scene_output_commit(output->scene_output, NULL);
+        struct timespec now_ts;
+        clock_gettime(CLOCK_MONOTONIC, &now_ts);
+        wlr_scene_output_send_frame_done(output->scene_output, &now_ts);
+    } else {
+        if (active) {
+            wlr_output_schedule_frame(output->wlr_output);
+        }
+        output_render_custom(output);
     }
 }
 
@@ -217,7 +230,6 @@ Output *output_create(Server *server, struct wlr_output *wlr_output) {
 
 void output_destroy(Output *output) {
     if (!output) return;
-
     Server *server = output->server;
     bool shutting_down = server->shutting_down;
 
@@ -225,6 +237,7 @@ void output_destroy(Output *output) {
         workspace_hide(output->active_workspace);
         output->active_workspace = NULL;
     }
+
     Workspace *ws_cleanup;
     wl_list_for_each(ws_cleanup, &server->workspaces, link) {
         if (ws_cleanup->last_output == output) {
@@ -235,7 +248,6 @@ void output_destroy(Output *output) {
     if (!shutting_down) {
         Output *fallback = NULL;
         Output *candidate;
-
         wl_list_for_each(candidate, &server->outputs, link) {
             if (candidate != output) {
                 fallback = candidate;
@@ -250,21 +262,22 @@ void output_destroy(Output *output) {
         if (server->focused_view &&
             (!server->focused_view->output || server->focused_view->output == output)) {
             View *next = NULL;
-
             if (fallback && fallback->active_workspace) {
                 next = workspace_focused_view(fallback->active_workspace);
                 if (!next) {
                     next = workspace_first_view(fallback->active_workspace);
                 }
             }
-
             server_focus_view(server, next);
         }
     }
 
-    wl_list_remove(&output->frame.link);
-    wl_list_remove(&output->destroy.link);
-    wl_list_remove(&output->link);
+    listener_remove(&output->frame);
+    listener_remove(&output->destroy);
+    if (!wl_list_empty(&output->link)) {
+        wl_list_remove(&output->link);
+        wl_list_init(&output->link);
+    }
 
     if (output->wallpaper_fade) {
         wlr_scene_node_destroy(&output->wallpaper_fade->node);
@@ -283,7 +296,6 @@ void output_destroy(Output *output) {
     }
 
     wlr_output_layout_remove(server->output_layout, output->wlr_output);
-
     free(output);
 
     if (!shutting_down) {

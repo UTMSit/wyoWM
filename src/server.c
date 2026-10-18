@@ -416,26 +416,37 @@ void server_view_mapped(Server *server, View *view) {
     if (!view->workspace || !view->output) return;
 
    	if (!view->tiled && !view->floating && !view->fullscreen && !view->dragging) {
-		bool transient = view->type == VIEW_TYPE_XDG &&
-		                 view->xdg.toplevel &&
-		                 view->xdg.toplevel->parent != NULL;
-		if (transient) {
-			view->floating = true;
-			Output *out = view->output;
-			if (out) {
-				int width = view->width > 0 ? view->width : 640;
-				int height = view->height > 0 ? view->height : 480;
-				int x = (out->width - width) / 2;
-				int y = (out->height - height) / 2;
-				if (x < 0) x = 0;
-				if (y < 0) y = 0;
-				view_set_geometry(view, x, y, width, height);
-			}
-		} else {
-			workspace_add_view(view->workspace, view);
-			view->tiled = true;
-		}
-	}
+        bool transient = false;
+        if (view->type == VIEW_TYPE_XDG &&
+            view->xdg.toplevel &&
+            view->xdg.toplevel->parent != NULL) {
+            transient = true;
+        }
+    #if defined(WYO_HAS_XWAYLAND)
+        if (view->type == VIEW_TYPE_XWAYLAND && view->xwayland.xsurface) {
+            if (view->xwayland.xsurface->parent != NULL ||
+                view->xwayland.xsurface->override_redirect) {
+                transient = true;
+            }
+        }
+    #endif
+        if (transient) {
+            view->floating = true;
+            Output *out = view->output;
+            if (out) {
+                int width = view->width > 0 ? view->width : 640;
+                int height = view->height > 0 ? view->height : 480;
+                int x = (out->width - width) / 2;
+                int y = (out->height - height) / 2;
+                if (x < 0) x = 0;
+                if (y < 0) y = 0;
+                view_set_geometry(view, x, y, width, height);
+            }
+        } else {
+            workspace_add_view(view->workspace, view);
+            view->tiled = true;
+        }
+    }
 
     server_focus_view(server, view);
     server_arrange(server);
@@ -733,46 +744,47 @@ void server_arrange(Server *server) {
 }
 
 static void handle_constraint_destroy(struct wl_listener *listener, void *data) {
-	Server *server = wl_container_of(listener, server, constraint_destroy);
-	struct wlr_pointer_constraint_v1 *constraint = data;
-
-	fprintf(stderr, "wyowm: constraint destroy\n");
-	if (server->active_constraint == constraint) {
-		server->active_constraint = NULL;
-		server->cursor_hidden = false;
-		server->client_cursor_hidden = false;
-		server->client_cursor_hidden_time = 0;
-		if (server->xcursor_manager) {
-			wlr_cursor_set_xcursor(server->cursor, server->xcursor_manager, "left_ptr");
-		}
-	}
-    wl_list_remove(&server->constraint_destroy.link);
+    Server *server = wl_container_of(listener, server, constraint_destroy);
+    struct wlr_pointer_constraint_v1 *constraint = data;
+    if (server->active_constraint == constraint) {
+        server->active_constraint = NULL;
+        server->cursor_hidden = false;
+        server->client_cursor_hidden = false;
+        server->client_cursor_hidden_time = 0;
+        if (server->cursor && server->xcursor_manager) {
+            wlr_cursor_set_xcursor(server->cursor, server->xcursor_manager, "left_ptr");
+        }
+    }
+    listener_remove(&server->constraint_destroy);
 }
 
 static void handle_new_constraint(struct wl_listener *listener, void *data) {
-	Server *server = wl_container_of(listener, server, new_constraint);
-	struct wlr_pointer_constraint_v1 *constraint = data;
-
-	if (!constraint || !server->cursor) return;
-
-	fprintf(stderr, "wyowm: constraint type=%d\n", constraint->type);
-
+    Server *server = wl_container_of(listener, server, new_constraint);
+    struct wlr_pointer_constraint_v1 *constraint = data;
+    if (!constraint || !server->cursor) {
+        return;
+    }
     if (server->active_constraint) {
+        listener_remove(&server->constraint_destroy);
         wlr_pointer_constraint_v1_send_deactivated(server->active_constraint);
     }
-
     server->active_constraint = constraint;
     constraint->data = server;
     server->constraint_destroy.notify = handle_constraint_destroy;
     wl_signal_add(&constraint->events.destroy, &server->constraint_destroy);
-
     wlr_pointer_constraint_v1_send_activated(constraint);
-
     if (constraint->type == WLR_POINTER_CONSTRAINT_V1_LOCKED) {
         server->cursor_hidden = true;
         server->client_cursor_hidden = true;
         wlr_cursor_set_surface(server->cursor, NULL, 0, 0);
         wlr_cursor_unset_image(server->cursor);
+    } else {
+        server->cursor_hidden = false;
+        server->client_cursor_hidden = false;
+        server->client_cursor_hidden_time = 0;
+        if (server->xcursor_manager) {
+            wlr_cursor_set_xcursor(server->cursor, server->xcursor_manager, "left_ptr");
+        }
     }
 }
 
@@ -780,6 +792,35 @@ bool server_init(Server *server) {
     memset(server, 0, sizeof(Server));
     server->shutting_down = false;
     server->reload_fd = -1;
+
+    wl_list_init(&server->new_output.link);
+    wl_list_init(&server->new_toplevel.link);
+    wl_list_init(&server->new_input.link);
+    wl_list_init(&server->new_layer_surface.link);
+    wl_list_init(&server->cursor_motion.link);
+    wl_list_init(&server->cursor_motion_absolute.link);
+    wl_list_init(&server->cursor_button.link);
+    wl_list_init(&server->cursor_axis.link);
+    wl_list_init(&server->new_xdg_decoration.link);
+    wl_list_init(&server->request_set_selection.link);
+    wl_list_init(&server->request_set_cursor.link);
+    wl_list_init(&server->request_start_drag.link);
+    wl_list_init(&server->start_drag.link);
+    wl_list_init(&server->drag_focus.link);
+    wl_list_init(&server->drag_motion.link);
+    wl_list_init(&server->drag_drop.link);
+    wl_list_init(&server->drag_destroy.link);
+    wl_list_init(&server->request_set_cursor_shape.link);
+    wl_list_init(&server->new_constraint.link);
+    wl_list_init(&server->constraint_destroy.link);
+    wl_list_init(&server->ext_workspace_commit.link);
+    wl_list_init(&server->ext_workspace_destroy_listener.link);
+    wl_list_init(&server->xdg_activation_request_activate.link);
+#if defined(WYO_HAS_XWAYLAND)
+    wl_list_init(&server->xwayland_ready.link);
+    wl_list_init(&server->xwayland_new_surface.link);
+    wl_list_init(&server->xwayland_destroy.link);
+#endif
 
     server->display = wl_display_create();
     if (!server->display) return false;
@@ -924,11 +965,40 @@ bool server_init(Server *server) {
 
     wl_list_init(&server->outputs);
     wl_list_init(&server->views);
-
     wl_list_init(&server->workspaces);
     wl_list_init(&server->keyboards);
     wl_list_init(&server->popup_surfaces);
+    wl_list_init(&server->layer_surfaces);
+
+    wl_list_init(&server->new_output.link);
+    wl_list_init(&server->new_toplevel.link);
+    wl_list_init(&server->new_input.link);
+    wl_list_init(&server->new_layer_surface.link);
+    wl_list_init(&server->cursor_motion.link);
+    wl_list_init(&server->cursor_motion_absolute.link);
+    wl_list_init(&server->cursor_button.link);
+    wl_list_init(&server->cursor_axis.link);
+    wl_list_init(&server->request_set_selection.link);
+    wl_list_init(&server->request_set_cursor.link);
+    wl_list_init(&server->request_start_drag.link);
+    wl_list_init(&server->start_drag.link);
+    wl_list_init(&server->drag_focus.link);
+    wl_list_init(&server->drag_motion.link);
+    wl_list_init(&server->drag_drop.link);
+    wl_list_init(&server->drag_destroy.link);
+    wl_list_init(&server->new_xdg_decoration.link);
+    wl_list_init(&server->request_set_cursor_shape.link);
+    wl_list_init(&server->new_constraint.link);
+    wl_list_init(&server->constraint_destroy.link);
     wl_list_init(&server->focused_surface_destroy.link);
+    wl_list_init(&server->xdg_activation_request_activate.link);
+    wl_list_init(&server->ext_workspace_commit.link);
+    wl_list_init(&server->ext_workspace_destroy_listener.link);
+#if defined(WYO_HAS_XWAYLAND)
+    wl_list_init(&server->xwayland_ready.link);
+    wl_list_init(&server->xwayland_new_surface.link);
+    wl_list_init(&server->xwayland_destroy.link);
+#endif
 
     workspaces_init(server);
     ext_workspace_init(server);
@@ -1146,11 +1216,9 @@ void server_destroy(Server *server) {
     PopupSurface *popup_surface;
     PopupSurface *popup_surface_tmp;
     wl_list_for_each_safe(popup_surface, popup_surface_tmp, &server->popup_surfaces, link) {
-        if (!wl_list_empty(&popup_surface->destroy.link)) {
-            wl_list_remove(&popup_surface->destroy.link);
-            wl_list_init(&popup_surface->destroy.link);
-        }
+        listener_remove(&popup_surface->destroy);
         wl_list_remove(&popup_surface->link);
+        wl_list_init(&popup_surface->link);
         free(popup_surface);
     }
     wl_list_init(&server->popup_surfaces);
@@ -1160,6 +1228,7 @@ void server_destroy(Server *server) {
 	listener_remove(&server->new_toplevel);
 	listener_remove(&server->request_set_selection);
 	listener_remove(&server->xdg_activation_request_activate);
+	listener_remove(&server->constraint_destroy);
 	listener_remove(&server->new_constraint);
 	server->active_constraint = NULL;
     input_destroy(server);

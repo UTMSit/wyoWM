@@ -184,35 +184,52 @@ static int collect_blur_rects(
     return count;
 }
 
+static bool buffer_visible_on_output(struct wlr_scene_buffer *sb, struct Output *output) {
+    if (!sb || !sb->buffer || !output || !output->server) return true;
+    struct wlr_scene_surface *ss = wlr_scene_surface_try_from_buffer(sb);
+    if (!ss || !ss->surface) return true;
+    struct wlr_surface *root = wlr_surface_get_root_surface(ss->surface);
+    if (!root) return true;
+    Server *server = output->server;
+    View *view;
+    wl_list_for_each(view, &server->views, link) {
+        if (view->type == VIEW_TYPE_XDG && view->xdg.xdg_surface && view->xdg.xdg_surface->surface == root) {
+            return view->output == output;
+        }
+#if defined(WYO_HAS_XWAYLAND)
+        if (view->type == VIEW_TYPE_XWAYLAND && view->xwayland.xsurface && view->xwayland.xsurface->surface == root) {
+            return view->output == output;
+        }
+#endif
+    }
+    return true;
+}
+
 static void render_scene_tree(
     struct wlr_render_pass *pass,
     struct wlr_renderer *renderer,
     struct wlr_scene_tree *tree,
     int offset_x, int offset_y, float scale,
     FrameTextureList *owned, FrameSurfaceList *surfaces,
-    int blur_mode
+    int blur_mode,
+    struct Output *output
 ) {
     if (!tree || !tree->node.enabled) return;
-
     struct wlr_scene_node *child;
     wl_list_for_each(child, &tree->children, link) {
         if (!child->enabled) continue;
-
         float base_x = (float)(offset_x + child->x) * scale;
         float base_y = (float)(offset_y + child->y) * scale;
-
         if (child->type == WLR_SCENE_NODE_TREE) {
             struct wlr_scene_tree *sub = wlr_scene_tree_from_node(child);
             render_scene_tree(pass, renderer, sub,
                 offset_x + child->x, offset_y + child->y,
-                scale, owned, surfaces, blur_mode);
+                scale, owned, surfaces, blur_mode, output);
         } else if (child->type == WLR_SCENE_NODE_RECT) {
             if (blur_mode == BLUR_MODE_ONLY) continue;
-
             struct wlr_scene_rect *rect = wlr_scene_rect_from_node(child);
             if (rect->width <= 0 || rect->height <= 0) continue;
             if (rect->color[3] <= 0.0f) continue;
-
             struct wlr_render_rect_options opts = {0};
             opts.box.x = (int)lround(base_x);
             opts.box.y = (int)lround(base_y);
@@ -227,23 +244,20 @@ static void render_scene_tree(
             struct wlr_scene_buffer *sb = wlr_scene_buffer_from_node(child);
             if (!sb->buffer) continue;
             if (sb->opacity <= 0.0f) continue;
-
+            if (!buffer_visible_on_output(sb, output)) continue;
             struct wlr_scene_surface *ss = wlr_scene_surface_try_from_buffer(sb);
-
             bool needs_blur = false;
             if (ss && ss->surface) {
                 struct wlr_surface *root = wlr_surface_get_root_surface(ss->surface);
                 needs_blur = surface_needs_blur(ss->surface) ||
                              (root && surface_needs_blur(root));
             }
-
             if (blur_mode == BLUR_MODE_SKIP && needs_blur) {
                 continue;
             }
             if (blur_mode == BLUR_MODE_ONLY && !needs_blur) {
                 continue;
             }
-
             struct wlr_texture *texture = NULL;
             if (ss && ss->surface) {
                 texture = wlr_surface_get_texture(ss->surface);
@@ -253,7 +267,6 @@ static void render_scene_tree(
                 if (!texture) continue;
                 ftl_push(owned, texture);
             }
-
             int dst_w = sb->dst_width;
             int dst_h = sb->dst_height;
             if (dst_w <= 0) {
@@ -265,7 +278,6 @@ static void render_scene_tree(
                     ? (int)sb->src_box.height : (int)texture->height;
             }
             if (dst_w <= 0 || dst_h <= 0) continue;
-
             struct wlr_render_texture_options opts = {0};
             opts.texture = texture;
             opts.src_box = sb->src_box;
@@ -279,7 +291,6 @@ static void render_scene_tree(
                 opts.alpha = &sb->opacity;
             }
             wlr_render_pass_add_texture(pass, &opts);
-
             if (ss && ss->surface) {
                 fsl_push(surfaces, ss->surface);
             }
@@ -343,7 +354,7 @@ static bool render_direct(struct Output *output) {
     FrameSurfaceList surfaces = {0};
     float scale = wlr_output->scale > 0.0f ? wlr_output->scale : 1.0f;
     render_scene_tree(pass, server->renderer, server->scene_tree,
-        -output->x, -output->y, scale, &owned, &surfaces, BLUR_MODE_ALL);
+        -output->x, -output->y, scale, &owned, &surfaces, BLUR_MODE_ALL, output);
     int dw = wlr_output->width > 0 ? wlr_output->width : 1;
     int dh = wlr_output->height > 0 ? wlr_output->height : 1;
     pixman_region32_t damage;
@@ -372,39 +383,31 @@ static bool render_with_blur(struct Output *output, BlurRect *rects, int num_rec
     int ow = wlr_output->width;
     int oh = wlr_output->height;
     if (ow <= 0 || oh <= 0) return render_direct(output);
-
     struct wlr_buffer *offscreen = ensure_offscreen(server, ow, oh);
     if (!offscreen) return render_direct(output);
-
     struct wlr_buffer_pass_options bpass_opts = {0};
     struct wlr_render_pass *bpass = wlr_renderer_begin_buffer_pass(
         server->renderer, offscreen, &bpass_opts);
     if (!bpass) return render_direct(output);
-
     FrameTextureList owned = {0};
     FrameSurfaceList surfaces = {0};
     float scale = wlr_output->scale > 0.0f ? wlr_output->scale : 1.0f;
-
     render_scene_tree(bpass, server->renderer, server->scene_tree,
-        -output->x, -output->y, scale, &owned, &surfaces, BLUR_MODE_SKIP);
+        -output->x, -output->y, scale, &owned, &surfaces, BLUR_MODE_SKIP, output);
     wlr_render_pass_submit(bpass);
-
     GLuint fbo = wlr_gles2_renderer_get_buffer_fbo(server->renderer, offscreen);
     if (!fbo) {
         ftl_finish(&owned);
         fsl_finish(&surfaces);
         return render_direct(output);
     }
-
     GLScope scope;
     if (!gl_scope_begin(server, &scope)) {
         ftl_finish(&owned);
         fsl_finish(&surfaces);
         return render_direct(output);
     }
-
     glFinish();
-
     for (int i = 0; i < num_rects; i++) {
         int rx = (int)lround((float)rects[i].x * scale);
         int ry = (int)lround((float)rects[i].y * scale);
@@ -412,17 +415,14 @@ static bool render_with_blur(struct Output *output, BlurRect *rects, int num_rec
         int rh = (int)lround((float)rects[i].h * scale);
         blur_apply_region(&g_blur, fbo, ow, oh, rx, ry, rw, rh, 2);
     }
-
     glFinish();
     gl_scope_end(server, &scope);
-
     struct wlr_texture *offscreen_tex = wlr_texture_from_buffer(server->renderer, offscreen);
     if (!offscreen_tex) {
         ftl_finish(&owned);
         fsl_finish(&surfaces);
         return render_direct(output);
     }
-
     struct wlr_output_state state;
     wlr_output_state_init(&state);
     struct wlr_render_pass *pass = wlr_output_begin_render_pass(wlr_output, &state, NULL);
@@ -433,7 +433,6 @@ static bool render_with_blur(struct Output *output, BlurRect *rects, int num_rec
         wlr_output_state_finish(&state);
         return false;
     }
-
     if (offscreen_tex) {
         struct wlr_render_texture_options bg = {0};
         bg.texture = offscreen_tex;
@@ -443,10 +442,8 @@ static bool render_with_blur(struct Output *output, BlurRect *rects, int num_rec
         bg.dst_box.height = oh;
         wlr_render_pass_add_texture(pass, &bg);
     }
-
     render_scene_tree(pass, server->renderer, server->scene_tree,
-        -output->x, -output->y, scale, &owned, &surfaces, BLUR_MODE_ONLY);
-
+        -output->x, -output->y, scale, &owned, &surfaces, BLUR_MODE_ONLY, output);
     int dw = ow > 0 ? ow : 1;
     int dh = oh > 0 ? oh : 1;
     pixman_region32_t damage;
@@ -481,38 +478,26 @@ bool output_has_fullscreen_view(Output *output) {
 }
 
 bool output_render_custom(struct Output *output) {
-    if (!output || !output->wlr_output || !output->server) return false;
-	output->render_pending = false;
-
-	Server *server = output->server;
-
-	if (!g_blur_tried) {
-		g_blur_tried = true;
-		if (wlr_renderer_is_gles2(server->renderer)) {
-			GLScope scope;
-			if (gl_scope_begin(server, &scope)) {
-				blur_init(&g_blur, 6);
-				gl_scope_end(server, &scope);
-			}
-		}
-	}
-
-	BlurRect rects[MAX_BLUR_RECTS];
-	int num_rects = 0;
-	if (g_blur.initialized && !output_has_fullscreen_view(output)) {
-		num_rects = collect_blur_rects(server->scene_tree,
-			-output->x, -output->y, rects, MAX_BLUR_RECTS, 0);
-	}
-
-	if (num_rects > 0) {
-		return render_with_blur(output, rects, num_rects);
-	}
-
-	bool ok = wlr_scene_output_commit(output->scene_output, NULL);
-	if (ok) {
-		struct timespec now;
-		clock_gettime(CLOCK_MONOTONIC, &now);
-		wlr_scene_output_send_frame_done(output->scene_output, &now);
-	}
-	return ok;
+    output->render_pending = false;
+    Server *server = output->server;
+    if (!g_blur_tried) {
+        g_blur_tried = true;
+        if (wlr_renderer_is_gles2(server->renderer)) {
+            GLScope scope;
+            if (gl_scope_begin(server, &scope)) {
+                blur_init(&g_blur, 6);
+                gl_scope_end(server, &scope);
+            }
+        }
+    }
+    BlurRect rects[MAX_BLUR_RECTS];
+    int num_rects = 0;
+    if (g_blur.initialized && !output_has_fullscreen_view(output)) {
+        num_rects = collect_blur_rects(server->scene_tree,
+            -output->x, -output->y, rects, MAX_BLUR_RECTS, 0);
+    }
+    if (num_rects > 0) {
+        return render_with_blur(output, rects, num_rects);
+    }
+    return render_direct(output);
 }

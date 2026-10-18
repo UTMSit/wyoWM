@@ -617,6 +617,7 @@ static void handle_xwayland_request_configure(struct wl_listener *listener, void
     View *view = wl_container_of(listener, view, xwayland.request_configure);
     struct wlr_xwayland_surface_configure_event *event = data;
     if (!view || !view->xwayland.xsurface || !event) return;
+    if (!view->xwayland.xsurface->surface) return;
     if (view->floating || !view->tiled) {
         wlr_xwayland_surface_configure(event->surface, event->x, event->y, event->width, event->height);
         int rel_x = event->x;
@@ -688,10 +689,14 @@ View *view_create_xwayland(Server *server, struct wlr_xwayland_surface *xsurface
     animation_init(&view->anim_x, 0.0);
     animation_init(&view->anim_y, 0.0);
     animation_init(&view->border_blend, 0.0);
-    xsurface->data = view;
-    wl_list_init(&view->link);
-    wl_list_init(&view->scene_node_destroy.link);
-    wl_list_init(&view->xwayland.associate.link);
+   	xsurface->data = view;
+	wl_list_init(&view->link);
+	wl_list_init(&view->scene_node_destroy.link);
+	wl_list_init(&view->decoration_destroy.link);
+	wl_list_init(&view->decoration_request_mode.link);
+	wl_list_init(&view->set_title.link);
+	wl_list_init(&view->set_app_id.link);
+	wl_list_init(&view->xwayland.associate.link);
     wl_list_init(&view->xwayland.dissociate.link);
     wl_list_init(&view->xwayland.request_configure.link);
     wl_list_init(&view->xwayland.request_activate.link);
@@ -846,34 +851,34 @@ void view_destroy(View *view) {
         server_view_destroyed(server, view);
     }
 
-    if (view->type == VIEW_TYPE_XDG && view->xdg.listeners_initialized) {
-        listener_remove(&view->decoration_request_mode);
-        listener_remove(&view->xdg.map);
-        listener_remove(&view->xdg.unmap);
-        listener_remove(&view->xdg.destroy);
-        listener_remove(&view->xdg.commit);
-        listener_remove(&view->xdg.toplevel_destroy);
-        listener_remove(&view->xdg.request_fullscreen);
-        listener_remove(&view->xdg.request_move);
-        listener_remove(&view->xdg.request_resize);
-        listener_remove(&view->xdg.new_popup);
-        listener_remove(&view->set_title);
-        listener_remove(&view->set_app_id);
-        view->xdg.listeners_initialized = false;
-    }
-#if defined(WYO_HAS_XWAYLAND)
-    if (view->type == VIEW_TYPE_XWAYLAND) {
-        listener_remove(&view->xwayland.associate);
-        listener_remove(&view->xwayland.dissociate);
-        listener_remove(&view->xwayland.request_configure);
-        listener_remove(&view->xwayland.request_activate);
-        listener_remove(&view->xwayland.request_close);
-        listener_remove(&view->xwayland.request_fullscreen);
-        listener_remove(&view->xwayland.destroy);
-        listener_remove(&view->xwayland.map);
-        listener_remove(&view->xwayland.unmap);
-    }
-#endif
+   	if (view->type == VIEW_TYPE_XDG && view->xdg.listeners_initialized) {
+		listener_remove(&view->decoration_request_mode);
+		listener_remove(&view->xdg.map);
+		listener_remove(&view->xdg.unmap);
+		listener_remove(&view->xdg.destroy);
+		listener_remove(&view->xdg.commit);
+		listener_remove(&view->xdg.toplevel_destroy);
+		listener_remove(&view->xdg.request_fullscreen);
+		listener_remove(&view->xdg.request_move);
+		listener_remove(&view->xdg.request_resize);
+		listener_remove(&view->xdg.new_popup);
+		listener_remove(&view->set_title);
+		listener_remove(&view->set_app_id);
+		view->xdg.listeners_initialized = false;
+	}
+   #if defined(WYO_HAS_XWAYLAND)
+	if (view->type == VIEW_TYPE_XWAYLAND) {
+		listener_remove(&view->xwayland.associate);
+		listener_remove(&view->xwayland.dissociate);
+		listener_remove(&view->xwayland.request_configure);
+		listener_remove(&view->xwayland.request_activate);
+		listener_remove(&view->xwayland.request_close);
+		listener_remove(&view->xwayland.request_fullscreen);
+		listener_remove(&view->xwayland.destroy);
+		listener_remove(&view->xwayland.map);
+		listener_remove(&view->xwayland.unmap);
+	}
+   #endif
     view_foreign_destroy(view);
 
     if (view->scene_tree) {
@@ -1066,7 +1071,10 @@ void view_set_geometry(View *view, int x, int y, int width, int height) {
     }
 
     #if defined(WYO_HAS_XWAYLAND)
-        else if (view->type == VIEW_TYPE_XWAYLAND && view->xwayland.xsurface && size_changed) {
+        else if (view->type == VIEW_TYPE_XWAYLAND &&
+                 view->xwayland.xsurface &&
+                 view->xwayland.xsurface->surface &&
+                 size_changed) {
             wlr_xwayland_surface_configure(view->xwayland.xsurface, view->x, view->y, width, height);
         }
     #endif

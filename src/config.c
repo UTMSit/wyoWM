@@ -450,7 +450,7 @@ static void parse_config_line(Config *config, const char *line) {
 				if (config->anim_rule_count < MAX_ANIM_RULES) {
 					snprintf(config->anim_rules[config->anim_rule_count].type, 64, "%s", type);
 					config->anim_rules[config->anim_rule_count].enabled = enabled;
-					config->anim_rules[config->anim_rule_count].duration_ms = duration * 100;
+					config->anim_rules[config->anim_rule_count].duration_ms = duration;
 					snprintf(config->anim_rules[config->anim_rule_count].curve_name, 64, "%s", curve_name);
 					config->anim_rule_count++;
 				}
