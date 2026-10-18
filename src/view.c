@@ -677,7 +677,13 @@ View *view_create_xwayland(Server *server, struct wlr_xwayland_surface *xsurface
     view->xwayland.xsurface = xsurface;
     view->width = xsurface->width > 0 ? xsurface->width : 800;
     view->height = xsurface->height > 0 ? xsurface->height : 600;
-    struct wlr_scene_tree *view_parent = server->view_tree ? server->view_tree : server->scene_tree;
+    struct wlr_scene_tree *view_parent = server->tiled_tree;
+    if (!view_parent) {
+	view_parent = server->view_tree;
+    }
+    if (!view_parent) {
+	view_parent = server->scene_tree;
+    }
     view->root_tree = wlr_scene_tree_create(view_parent);
     if (!view->root_tree) { free(view); return NULL; }
     for (int i = 0; i < 4; i++) {
@@ -742,7 +748,13 @@ View *view_create_xdg(Server *server, struct wlr_xdg_surface *xdg_surface, struc
     view->xdg.toplevel = toplevel;
     view->xdg.listeners_initialized = false;
 
-    struct wlr_scene_tree *view_parent = server->view_tree ? server->view_tree : server->scene_tree;
+    struct wlr_scene_tree *view_parent = server->tiled_tree;
+    if (!view_parent) {
+	view_parent = server->view_tree;
+    }
+    if (!view_parent) {
+	view_parent = server->scene_tree;
+    }
     view->root_tree = wlr_scene_tree_create(view_parent);
     if (!view->root_tree) {
         free(view);
@@ -990,6 +1002,34 @@ void view_cleanup_for_shutdown(View *view) {
     free(view);
 }
 
+void view_update_scene_parent(View *view) {
+	if (!view || !view->root_tree || !view->server) return;
+
+	struct wlr_scene_tree *desired = NULL;
+
+	if (view->fullscreen) {
+		desired = view->server->fullscreen_tree;
+	} else if (view->floating) {
+		desired = view->server->floating_tree;
+	} else {
+		desired = view->server->tiled_tree;
+	}
+
+	if (!desired) {
+		desired = view->server->view_tree;
+	}
+
+	if (!desired) {
+		desired = view->server->scene_tree;
+	}
+
+	if (!desired) return;
+
+	if (view->root_tree->node.parent != desired) {
+		wlr_scene_node_reparent(&view->root_tree->node, desired);
+	}
+}
+
 void view_set_geometry(View *view, int x, int y, int width, int height) {
     if (!view || width <= 0 || height <= 0) return;
 
@@ -1060,8 +1100,6 @@ void view_set_geometry(View *view, int x, int y, int width, int height) {
 		animation_set_target(&view->anim_y, (double)new_y, 0, EASING_LINEAR, NULL);
 	}
 
-    view_apply_geometry(view);
-
     if (view->type == VIEW_TYPE_XDG &&
         view->xdg.toplevel &&
         view->xdg.xdg_surface &&
@@ -1079,8 +1117,10 @@ void view_set_geometry(View *view, int x, int y, int width, int height) {
         }
     #endif
 
-    view_update_border(view);
-    view_foreign_sync(view);
+    view_apply_geometry(view);
+	view_update_border(view);
+	view_foreign_sync(view);
+	view_update_scene_parent(view);
 }
 
 void view_set_opacity(View *view, double opacity) {
@@ -1368,10 +1408,11 @@ void view_toggle_fullscreen(View *view) {
 			view_set_geometry(view, view->saved_x, view->saved_y, width, height);
 		}
 
-		if (view->root_tree && view->server && view->server->view_tree) {
-			wlr_scene_node_reparent(&view->root_tree->node, view->server->view_tree);
+		view_update_scene_parent(view);
+		if (view->root_tree) {
 			wlr_scene_node_raise_to_top(&view->root_tree->node);
 		}
+		server_arrange(server);
 		return;
 	}
 

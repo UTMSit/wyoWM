@@ -33,7 +33,7 @@ void workspace_remove_view(Workspace *workspace, View *view);
 View *workspace_focused_view(Workspace *workspace);
 View *workspace_first_view(Workspace *workspace);
 View *workspace_get_focused(Workspace *workspace);
-bool workspace_empty(Workspace *workspace);
+bool workspace_empty(struct Server *server, Workspace *workspace);
 void server_switch_workspace(struct Server *server, struct Output *output, int id);
 Workspace *workspace_find(struct Server *server, int id);
 Workspace *workspace_first_free(struct Server *server);

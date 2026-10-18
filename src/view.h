@@ -132,6 +132,7 @@ void view_toggle_fullscreen(View *view);
 void view_center(View *view);
 void view_move_by(View *view, int dx, int dy);
 void view_refresh_decorations(View *view);
+void view_update_scene_parent(View *view);
 bool view_frame_update(View *view, int64_t now_ms);
 void view_foreign_sync(View *view);
 #if defined(WYO_HAS_XWAYLAND)

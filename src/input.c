@@ -364,25 +364,22 @@ static bool handle_keybind_action(Server *server, const ConfigKeybind *bind) {
 
         if (!view->output) return true;
 
-        if (view->tiled && view->workspace) {
+      		if (view->tiled && view->workspace) {
 			dwindle_remove_view(&view->workspace->layout, view);
 			view->tiled = false;
 			view->floating = true;
-
-            if (view->width >= view->output->width - 16 &&
-                view->height >= view->output->height - 16) {
-                int width = view->output->width * 8 / 10;
-                int height = view->output->height * 8 / 10;
-
-                int x = (view->output->width - width) / 2;
-                int y = (view->output->height - height) / 2;
-
-                if (x < 0) x = 0;
-                if (y < 0) y = 0;
-
-                view_set_geometry(view, x, y, width, height);
-            }
-        } else if (view->floating) {
+			if (view->width >= view->output->width - 16 &&
+			    view->height >= view->output->height - 16) {
+				int width = view->output->width * 8 / 10;
+				int height = view->output->height * 8 / 10;
+				int x = (view->output->width - width) / 2;
+				int y = (view->output->height - height) / 2;
+				if (x < 0) x = 0;
+				if (y < 0) y = 0;
+				view_set_geometry(view, x, y, width, height);
+			}
+			server_arrange(server);
+		} else if (view->floating) {
 			view->floating = false;
 			if (view->workspace) {
 				dwindle_add_view(&view->workspace->layout, view);
@@ -507,6 +504,29 @@ static struct wlr_surface *surface_at_cursor(Server *server, double *sx, double 
     }
 
     return scene_surface->surface;
+}
+
+void input_refocus_pointer(Server *server) {
+	if (!server || !server->seat || !server->cursor) return;
+
+	double sx = 0.0;
+	double sy = 0.0;
+	struct wlr_surface *surface = surface_at_cursor(server, &sx, &sy);
+	uint32_t time = (uint32_t)animation_now_ms();
+
+	if (surface) {
+		if (server->seat->pointer_state.focused_surface != surface) {
+			wlr_seat_pointer_notify_enter(server->seat, surface, sx, sy);
+		}
+		wlr_seat_pointer_notify_motion(server->seat, time, sx, sy);
+		wlr_seat_pointer_notify_frame(server->seat);
+		return;
+	}
+
+	if (server->seat->pointer_state.focused_surface) {
+		wlr_seat_pointer_clear_focus(server->seat);
+		wlr_seat_pointer_notify_frame(server->seat);
+	}
 }
 
 static bool surface_is_popup(Server *server, struct wlr_surface *surface) {
@@ -1015,17 +1035,20 @@ static void handle_cursor_button(struct wl_listener *listener, void *data) {
         struct wlr_surface *surface = surface_at_cursor(server, &sx, &sy);
         View *view = surface ? view_from_surface(server, surface) : NULL;
 
-        if (!view && !surface) {
-            View *v;
-            wl_list_for_each(v, &server->views, link) {
-                if (!v->mapped || v->fullscreen || !v->output) continue;
-                if (server->cursor->x >= v->x && server->cursor->x < v->x + v->width &&
-                    server->cursor->y >= v->y && server->cursor->y < v->y + v->height) {
-                    view = v;
-                    break;
-                }
-            }
-        }
+     			if (!view && !surface) {
+				View *v;
+				View *chosen = NULL;
+				wl_list_for_each(v, &server->views, link) {
+					if (!v->mapped || !v->output) continue;
+					if (server->cursor->x >= v->x && server->cursor->x < v->x + v->width &&
+						server->cursor->y >= v->y && server->cursor->y < v->y + v->height) {
+						if (!chosen || (v->fullscreen && !chosen->fullscreen)) {
+							chosen = v;
+						}
+					}
+				}
+				view = chosen;
+			}
 
         if (view && !view->fullscreen) {
             bool start_drag = false;

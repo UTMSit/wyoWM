@@ -194,8 +194,10 @@ static void handle_xdg_activation_request_activate(struct wl_listener *listener,
 		    view->mapped &&
 		    view->xdg.xdg_surface &&
 		    view->xdg.xdg_surface->surface == root) {
-			server_focus_view(server, view);
-			return;
+						View *fs = view->output ? output_fullscreen_view(view->output) : NULL;
+						if (fs && fs != view) return;
+						server_focus_view(server, view);
+						return;
 		}
 	}
 }
@@ -463,6 +465,44 @@ void server_view_mapped(Server *server, View *view) {
     ext_workspace_sync(server);
 }
 
+static void server_release_workspace_if_empty(Server *server, Workspace *ws) {
+	if (!server || server->shutting_down || !ws || !ws->output) return;
+	if (!workspace_empty(server, ws)) return;
+
+	Output *out = ws->output;
+	bool was_active = (out->active_workspace == ws);
+
+	workspace_hide(ws);
+	ws->last_output = NULL;
+
+	if (!was_active) return;
+
+	Workspace *replacement = NULL;
+	Workspace *w;
+
+	wl_list_for_each(w, &server->workspaces, link) {
+		if (w != ws && !w->output && workspace_empty(server, w)) {
+			replacement = w;
+			break;
+		}
+	}
+
+	if (!replacement) {
+		wl_list_for_each(w, &server->workspaces, link) {
+			if (w != ws && !w->output) {
+				replacement = w;
+				break;
+			}
+		}
+	}
+
+	out->active_workspace = replacement;
+
+	if (replacement) {
+		workspace_show(replacement, out);
+	}
+}
+
 void server_view_unmapped(Server *server, View *view) {
     if (!view || !server || server->shutting_down) return;
 
@@ -477,6 +517,7 @@ void server_view_unmapped(Server *server, View *view) {
         workspace_remove_view(view->workspace, view);
     }
 
+    view->output = NULL;
     view->tiled = false;
 
     if (server->focused_view == view) {
@@ -514,20 +555,27 @@ void server_view_destroyed(Server *server, View *view) {
         server->drag.view = NULL;
     }
 
-    if (view->workspace) {
-        workspace_remove_view(view->workspace, view);
+    Workspace *ws = view->workspace;
+    if (ws) {
+        workspace_remove_view(ws, view);
+        view->workspace = NULL;
     }
 
+    view->output = NULL;
     view->tiled = false;
 
     if (server->focused_view == view) {
         View *next = NULL;
 
-        if (view->workspace && view->workspace->output) {
-            next = workspace_focused_view(view->workspace);
+        if (ws) {
+            next = workspace_focused_view(ws);
             if (!next) {
-                next = workspace_first_view(view->workspace);
+                next = workspace_first_view(ws);
             }
+        }
+
+        if (ws) {
+            server_release_workspace_if_empty(server, ws);
         }
 
         if (!next && server->active_output && server->active_output->active_workspace) {
@@ -538,6 +586,10 @@ void server_view_destroyed(Server *server, View *view) {
         }
 
         server_focus_view(server, next);
+    } else {
+        if (ws) {
+            server_release_workspace_if_empty(server, ws);
+        }
     }
 
     server_arrange(server);
@@ -546,19 +598,52 @@ void server_view_destroyed(Server *server, View *view) {
 }
 
 static void server_raise_floating(Server *server) {
-    if (!server || server->shutting_down) return;
-    View *view;
-    wl_list_for_each(view, &server->views, link) {
-        if (view->mapped && view->floating && !view->fullscreen && view->root_tree) {
-            wlr_scene_node_raise_to_top(&view->root_tree->node);
-        }
-    }
+	if (!server || server->shutting_down) return;
+
+	View *focused = server->focused_view;
+	View *view;
+
+	wl_list_for_each_reverse(view, &server->views, link) {
+		if (view == focused) continue;
+		if (!view->mapped || !view->floating || view->fullscreen || !view->output || !view->root_tree) {
+			continue;
+		}
+		wlr_scene_node_raise_to_top(&view->root_tree->node);
+	}
+
+	if (focused && focused->mapped && focused->floating &&
+	    !focused->fullscreen && focused->output && focused->root_tree) {
+		wlr_scene_node_raise_to_top(&focused->root_tree->node);
+	}
+}
+
+View *output_fullscreen_view(Output *output) {
+	if (!output || !output->server) return NULL;
+
+	View *view;
+	wl_list_for_each(view, &output->server->views, link) {
+		if (view->output == output &&
+			view->mapped &&
+			view->fullscreen &&
+			view->root_tree &&
+			view->root_tree->node.enabled) {
+			return view;
+		}
+	}
+
+	return NULL;
 }
 
 void server_focus_view(Server *server, View *view) {
     if (!server || server->shutting_down) return;
     if (view && (!view->mapped || !view->output)) {
         view = NULL;
+    }
+    if (view && view->output) {
+        View *fs = output_fullscreen_view(view->output);
+        if (fs && fs != view) {
+            view = fs;
+        }
     }
     if (view && view->output) {
         server->active_output = view->output;
@@ -723,6 +808,11 @@ void server_arrange(Server *server) {
     }
 
     (void)layer_shell_arrange(server);
+
+    View *view;
+    wl_list_for_each(view, &server->views, link) {
+        view_update_scene_parent(view);
+    }
 
     wl_list_for_each(output, &server->outputs, link) {
 		Workspace *ws = output->active_workspace;
@@ -905,9 +995,14 @@ bool server_init(Server *server) {
     wlr_scene_node_lower_to_bottom(&server->background->node);
 
     server->view_tree = wlr_scene_tree_create(server->scene_tree);
+    server->tiled_tree = wlr_scene_tree_create(server->view_tree);
+    server->floating_tree = wlr_scene_tree_create(server->view_tree);
     server->layer_tree = wlr_scene_tree_create(server->scene_tree);
     server->fullscreen_tree = wlr_scene_tree_create(server->scene_tree);
-    if (!server->view_tree || !server->layer_tree || !server->fullscreen_tree) return false;
+    if (!server->view_tree || !server->tiled_tree || !server->floating_tree ||
+        !server->layer_tree || !server->fullscreen_tree) return false;
+
+    wlr_scene_node_raise_to_top(&server->floating_tree->node);
 
     server->scene_layout = wlr_scene_attach_output_layout(server->scene, server->output_layout);
     if (!server->scene_layout) return false;

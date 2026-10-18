@@ -5,6 +5,10 @@
 #include "layout.h"
 #include "ext_workspace.h"
 #include <stdlib.h>
+#include "input.h"
+#include <wlr/types/wlr_pointer_constraints_v1.h>
+#include <wlr/types/wlr_cursor.h>
+#include <wlr/types/wlr_xcursor_manager.h>
 
 typedef struct WorkspaceView {
     View *view;
@@ -154,29 +158,48 @@ Workspace *workspace_first_free(Server *server) {
     return NULL;
 }
 
-bool workspace_empty(Workspace *ws) {
-    if (!ws) return true;
-    if (ws->layout.root != NULL) return false;
-    return wl_list_empty(&ws->views);
+bool workspace_empty(Server *server, Workspace *ws) {
+	if (!ws) return true;
+	if (!server) return wl_list_empty(&ws->views);
+
+	View *view;
+	wl_list_for_each(view, &server->views, link) {
+		if (view->workspace == ws && view->mapped && !view->sticky) {
+			return false;
+		}
+	}
+
+	return true;
 }
 
 void workspace_hide(Workspace *ws) {
-    if (!ws || !ws->output) return;
+	if (!ws) return;
 
-    Output *out = ws->output;
-    Server *server = out->server;
+	if (!ws->output) {
+		if (wl_list_empty(&ws->views)) {
+			ws->last_output = NULL;
+		}
+		return;
+	}
 
-    View *view;
-    wl_list_for_each(view, &server->views, link) {
-        if (view->workspace == ws && view->output == out && view->mapped && !view->sticky) {
-            if (view->root_tree) {
-                wlr_scene_node_set_enabled(&view->root_tree->node, false);
-            }
-            view->output = NULL;
-        }
-    }
+	Output *out = ws->output;
+	Server *server = out->server;
 
-    ws->output = NULL;
+	View *view;
+	wl_list_for_each(view, &server->views, link) {
+		if (view->workspace == ws && view->output == out && view->mapped && !view->sticky) {
+			if (view->root_tree) {
+				wlr_scene_node_set_enabled(&view->root_tree->node, false);
+			}
+			view->output = NULL;
+		}
+	}
+
+	if (workspace_empty(server, ws)) {
+		ws->last_output = NULL;
+	}
+
+	ws->output = NULL;
 }
 
 void workspace_show(Workspace *ws, Output *out) {
@@ -227,41 +250,68 @@ void server_switch_workspace(Server *server, Output *output, int id) {
 
 	if (!target || target == current) return;
 
-	if (workspace_empty(target) && target->output && target->output != output) {
+	View *source_fs = output_fullscreen_view(output);
+	if (source_fs && server->active_constraint) {
+		wlr_pointer_constraint_v1_send_deactivated(server->active_constraint);
+		server->active_constraint = NULL;
+		server->cursor_hidden = false;
+		server->client_cursor_hidden = false;
+		server->client_cursor_hidden_time = 0;
+		if (server->xcursor_manager) {
+			wlr_cursor_set_xcursor(server->cursor, server->xcursor_manager, "left_ptr");
+		}
+	}
+
+	if (workspace_empty(server, target) && target->output && target->output != output) {
 		Output *old_out = target->output;
 		bool was_active = (old_out->active_workspace == target);
+
 		workspace_hide(target);
 		target->last_output = NULL;
+
 		if (was_active) {
 			Workspace *replacement = NULL;
 			Workspace *w;
+
 			wl_list_for_each(w, &server->workspaces, link) {
-				if (w != target && !w->output) {
+				if (w != target && !w->output && workspace_empty(server, w)) {
 					replacement = w;
 					break;
 				}
 			}
+
+			if (!replacement) {
+				wl_list_for_each(w, &server->workspaces, link) {
+					if (w != target && !w->output) {
+						replacement = w;
+						break;
+					}
+				}
+			}
+
+			old_out->active_workspace = replacement;
+
 			if (replacement) {
-				old_out->active_workspace = replacement;
 				workspace_show(replacement, old_out);
-			} else {
-				old_out->active_workspace = NULL;
 			}
 		}
 	}
 
 	Output *dest = output;
+
 	if (target->output) {
 		dest = target->output;
-	} else if (target->last_output) {
+	} else if (target->last_output && !workspace_empty(server, target)) {
 		dest = target->last_output;
 	}
 
 	if (dest != output) {
 		Workspace *current_dest = dest->active_workspace;
+
 		if (current_dest && current_dest != target) {
 			workspace_hide(current_dest);
 		}
+
 		target->output = dest;
 		dest->active_workspace = target;
 		workspace_show(target, dest);
@@ -273,20 +323,25 @@ void server_switch_workspace(Server *server, Output *output, int id) {
 		if (!next) {
 			next = workspace_first_view(target);
 		}
+
 		server_focus_view(server, next);
 
 		if (server->cursor) {
-        wlr_cursor_warp(
-            server->cursor,
-            NULL,
-            dest->x + dest->width / 2.0,
-            dest->y + dest->height / 2.0
-        );
-        dest->render_pending = true;
-        if (dest->wlr_output) {
-            wlr_output_schedule_frame(dest->wlr_output);
-        }
-    }
+			wlr_cursor_warp(
+				server->cursor,
+				NULL,
+				dest->x + dest->width / 2.0,
+				dest->y + dest->height / 2.0
+			);
+
+			dest->render_pending = true;
+
+			if (dest->wlr_output) {
+				wlr_output_schedule_frame(dest->wlr_output);
+			}
+		}
+
+		input_refocus_pointer(server);
 		ext_workspace_sync(server);
 		return;
 	}
@@ -305,6 +360,8 @@ void server_switch_workspace(Server *server, Output *output, int id) {
 	if (!next) {
 		next = workspace_first_view(target);
 	}
+
 	server_focus_view(server, next);
+	input_refocus_pointer(server);
 	ext_workspace_sync(server);
 }

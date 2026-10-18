@@ -51,6 +51,7 @@ struct wlr_surface;
 struct wlr_layer_shell_v1;
 struct wlr_buffer;
 struct wlr_drag;
+struct View *output_fullscreen_view(struct Output *output);
 
 typedef struct DragState {
     bool active;
@@ -93,6 +94,8 @@ typedef struct Server {
     struct wlr_scene *scene;
     struct wlr_scene_tree *scene_tree;
     struct wlr_scene_tree *view_tree;
+    struct wlr_scene_tree *tiled_tree;
+    struct wlr_scene_tree *floating_tree;
     struct wlr_scene_tree *layer_tree;
     struct wlr_scene_tree *fullscreen_tree;
     struct wlr_scene_output_layout *scene_layout;

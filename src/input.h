@@ -26,4 +26,5 @@ void input_spawn_command(const char *command);
 void input_reload_keymaps(struct Server *server);
 void input_reload_cursor(struct Server *server);
 void input_mark_cursor_output(struct Server *server);
+void input_refocus_pointer(struct Server *server);
 #endif

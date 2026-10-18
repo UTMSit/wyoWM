@@ -50,15 +50,20 @@ static void handle_frame(struct wl_listener *listener, void *data) {
         active = true;
     }
 
+    if (output_try_direct_scanout(output)) {
+        return;
+    }
+
+    if (active) {
+        wlr_output_schedule_frame(output->wlr_output);
+    }
+
     if (output_has_fullscreen_view(output)) {
         wlr_scene_output_commit(output->scene_output, NULL);
         struct timespec now_ts;
         clock_gettime(CLOCK_MONOTONIC, &now_ts);
         wlr_scene_output_send_frame_done(output->scene_output, &now_ts);
     } else {
-        if (active) {
-            wlr_output_schedule_frame(output->wlr_output);
-        }
         output_render_custom(output);
     }
 }

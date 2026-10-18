@@ -10,6 +10,22 @@
 
 #define MAX_BEZIERS 32
 #define MAX_ANIM_RULES 16
+#define MAX_BLUR_RULES 32
+
+typedef enum {
+    BLUR_MATCH_APP_ID,
+    BLUR_MATCH_CLASS,
+    BLUR_MATCH_INSTANCE,
+    BLUR_MATCH_NAMESPACE,
+    BLUR_MATCH_TITLE
+} BlurMatchType;
+
+typedef struct {
+    BlurMatchType type;
+    char pattern[128];
+    int radius;
+    double strength;
+} ConfigBlurRule;
 
 typedef struct {
 	char name[64];
@@ -87,6 +103,8 @@ typedef struct Config {
     char sticky_apps[1024];
     char cursor_theme[128];
     int cursor_size;
+    ConfigBlurRule blur_rules[MAX_BLUR_RULES];
+    int blur_rule_count;
     struct wl_list keybinds;
 	struct wl_list exec_once;
 	bool has_keybinds;

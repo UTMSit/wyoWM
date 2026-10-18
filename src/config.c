@@ -420,7 +420,7 @@ static void parse_config_line(Config *config, const char *line) {
 			exec->command = strdup(right);
 			wl_list_insert(&config->exec_once, &exec->link);
 		}
-	} else if (!strncasecmp(left, "bezier", 6)) {
+	} else if (!strncasecmp(left, "bezier", 6) && left[6] == '\0') {
 		char *eq2 = strchr(right, ',');
 		if (eq2) {
 			*eq2 = '\0';
@@ -438,7 +438,67 @@ static void parse_config_line(Config *config, const char *line) {
 				}
 			}
 		}
-	} else if (!strncasecmp(left, "animation", 9)) {
+	} else if (!strncasecmp(left, "blur", 4) && left[4] == '\0') {
+		char rule[256] = {0};
+		int radius = 6;
+		double strength = 1.0;
+		char *comma = strchr(right, ',');
+
+		if (comma) {
+			size_t n = (size_t)(comma - right);
+			if (n >= sizeof(rule)) {
+				n = sizeof(rule) - 1;
+			}
+
+			memcpy(rule, right, n);
+			rule[n] = '\0';
+
+			char *rest = comma + 1;
+			char *comma2 = strchr(rest, ',');
+
+			if (comma2) {
+				*comma2 = '\0';
+				radius = atoi(trim(rest));
+				strength = atof(trim(comma2 + 1));
+			} else {
+				radius = atoi(trim(rest));
+			}
+		} else {
+			snprintf(rule, sizeof(rule), "%s", trim(right));
+		}
+
+		char *pattern = trim(rule);
+		BlurMatchType type = BLUR_MATCH_APP_ID;
+
+		if (!strncasecmp(pattern, "app_id:", 7)) {
+			type = BLUR_MATCH_APP_ID;
+			pattern += 7;
+		} else if (!strncasecmp(pattern, "class:", 6)) {
+			type = BLUR_MATCH_CLASS;
+			pattern += 6;
+		} else if (!strncasecmp(pattern, "instance:", 9)) {
+			type = BLUR_MATCH_INSTANCE;
+			pattern += 9;
+		} else if (!strncasecmp(pattern, "namespace:", 10)) {
+			type = BLUR_MATCH_NAMESPACE;
+			pattern += 10;
+		} else if (!strncasecmp(pattern, "title:", 6)) {
+			type = BLUR_MATCH_TITLE;
+			pattern += 6;
+		}
+
+		while (*pattern == ' ' || *pattern == '\t') {
+			pattern++;
+		}
+
+		if (*pattern && config->blur_rule_count < MAX_BLUR_RULES) {
+			ConfigBlurRule *r = &config->blur_rules[config->blur_rule_count++];
+			r->type = type;
+			snprintf(r->pattern, sizeof(r->pattern), "%s", pattern);
+			r->radius = radius;
+			r->strength = strength;
+		}
+	} else if (!strncasecmp(left, "animation", 9) && left[9] == '\0') {
 		char *eq2 = strchr(right, ',');
 		if (eq2) {
 			*eq2 = '\0';
@@ -446,10 +506,11 @@ static void parse_config_line(Config *config, const char *line) {
 			char *vals = eq2 + 1;
 			int enabled, duration;
 			char curve_name[64] = {0};
+
 			if (sscanf(vals, "%d,%d,%63s", &enabled, &duration, curve_name) >= 3) {
 				if (config->anim_rule_count < MAX_ANIM_RULES) {
 					snprintf(config->anim_rules[config->anim_rule_count].type, 64, "%s", type);
-					config->anim_rules[config->anim_rule_count].enabled = enabled;
+					config->anim_rules[config->anim_rule_count].enabled = enabled != 0;
 					config->anim_rules[config->anim_rule_count].duration_ms = duration;
 					snprintf(config->anim_rules[config->anim_rule_count].curve_name, 64, "%s", curve_name);
 					config->anim_rule_count++;
