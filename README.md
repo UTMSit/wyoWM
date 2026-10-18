@@ -10,16 +10,19 @@ wyoWM is a Wayland compositor. It is based on wlroots 0.20. It uses a dwindle ti
 - Multi-monitor support.
 - Floating and fullscreen windows.
 - Pointer drag: Super + left button moves a window, Super + right button resizes it.
-- Borders, gaps, corner radius, and animations.
+- Borders, gaps, corner radius, and opacity.
+- Fully customizable animations with cubic bezier curves.
 - Wallpaper with fill, fit, stretch, and center modes.
 - Text config with hot reload.
 - XKB layout config for keyboard switching.
 - IPC socket and the wyoctl tool.
 - Layer shell support for bars and menus.
+- XWayland support for legacy X11 applications.
+- Tearing control protocol for gaming.
 
 ## Protocols
 
-xdg-shell, layer-shell, ext-workspace, foreign-toplevel, screencopy, viewporter, fractional-scale, xdg-activation, relative-pointer, pointer-gestures, presentation-time, xdg-decoration (server side), xdg-output.
+xdg-shell, layer-shell, ext-workspace, foreign-toplevel, screencopy, viewporter, fractional-scale, xdg-activation, relative-pointer, pointer-gestures, presentation-time, xdg-decoration (server side), xdg-output, tearing-control.
 
 ## Requirements
 
@@ -60,30 +63,37 @@ Select wyoWM in the display manager. Or run wyowm-session from a TTY.
 
 The config file is ~/.config/wyoWM/wyowm.conf. The compositor reads it at start. Use wyoconf-reload to apply changes without a restart.
 
-### Example
+### Animations
 
-    general.border_width = 2
-    general.border_color_focused = 0x6699ffff
-    general.border_color_unfocused = 0x4d4d59ff
-    general.background_color = 0x0a0d12ff
-    general.gaps_in = 4
-    general.gaps_out = 8
-    general.corner_radius = 8
-    general.animation_duration_ms = 160
-    general.wallpaper = ~/Pictures/wallpapers/wallpaper.jpg
-    general.wallpaper_mode = fill
-    general.kb_layouts = us,ru
-    general.kb_options = grp:alt_shift_toggle
+wyoWM supports Hyprland-style animation configuration using custom cubic bezier curves.
 
-    exec-once = pipewire
-    exec-once = wireplumber
-    exec-once = waybar
+#### Bezier curves
 
-    bind.super.q = exec kitty
-    bind.super.c = close
-    bind.super.v = togglefloating
-    bind.super.f = fullscreen
-    bind.super.1 = workspace 1
+Define custom easing curves with 4 control points.
+
+    bezier = <name>, <p1x>, <p1y>, <p2x>, <p2y>
+
+Example:
+
+    bezier = easeOutBack, 0.34, 1.56, 0.64, 1.0
+    bezier = easeOutQuint, 0.22, 1.0, 0.36, 1.0
+    bezier = mySmoothCurve, 0.0, 0.0, 0.2, 1.0
+
+#### Animation rules
+
+Apply curves to specific animation types.
+
+    animation = <type>, <enabled>, <speed>, <curve>
+
+- `type`: `windows` (geometry/movement), `fade` (opacity/borders), `workspaces` (switching).
+- `enabled`: `1` to enable, `0` to disable.
+- `speed`: duration multiplier (e.g., `4` = 400ms, `2` = 200ms).
+- `curve`: name of a defined bezier curve, or `default`.
+
+Example:
+
+    animation = windows, 1, 4, easeOutBack
+    animation = fade, 1, 3, easeOutQuint
 
 ### General keys
 
@@ -96,16 +106,12 @@ The config file is ~/.config/wyoWM/wyowm.conf. The compositor reads it at start.
 | gaps_in | integer |
 | gaps_out | integer |
 | corner_radius | number |
-| active_opacity | 0.0 to 1.0, used for the open animation |
-| inactive_opacity | parsed but not used |
-| animation_duration_ms | integer, 0 disables animations |
+| active_opacity | 0.0 to 1.0 |
+| inactive_opacity | 0.0 to 1.0 |
 | wallpaper | path, ~ is expanded |
 | wallpaper_mode | fill, fit, stretch, center |
 | kb_layouts | xkb layout list, example: us,ru |
-| kb_variant | xkb variant |
 | kb_options | xkb options, example: grp:alt_shift_toggle |
-| kb_model | xkb model |
-| kb_rules | xkb rules |
 
 ### Bind syntax
 
@@ -129,8 +135,6 @@ Actions:
 | resize left/down/up/right | resize the focused window |
 | workspace N | activate workspace N, key 0 means 10 |
 | vt N | switch virtual terminal |
-
-If the config has no binds, the compositor loads a default set. Super+1 to Super+0 always exist unless you bind the same keys.
 
 ### exec-once
 
@@ -163,7 +167,7 @@ Use the wyoctl tool:
 
 ## Screen sharing
 
-The compositor exposes wlr-screencopy. For OBS and Discord, install xdg-desktop-portal and xdg-desktop-portal-wlr. The compositor starts both portals at startup when the binaries exist. The compositor writes ~/.config/xdg-desktop-portal/portals.conf one time if the file does not exist.
+The compositor exposes wlr-screencopy. For OBS and Discord, install xdg-desktop-portal and xdg-desktop-portal-wlr. The compositor starts both portals at startup when the binaries exist.
 
 ## Logs
 

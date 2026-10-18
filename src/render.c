@@ -508,5 +508,11 @@ bool output_render_custom(struct Output *output) {
 		return render_with_blur(output, rects, num_rects);
 	}
 
-	return wlr_scene_output_commit(output->scene_output, NULL);
+	bool ok = wlr_scene_output_commit(output->scene_output, NULL);
+	if (ok) {
+		struct timespec now;
+		clock_gettime(CLOCK_MONOTONIC, &now);
+		wlr_scene_output_send_frame_done(output->scene_output, &now);
+	}
+	return ok;
 }
