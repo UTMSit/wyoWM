@@ -894,9 +894,9 @@ bool config_generate_default(const char *path) {
     fprintf(fp, "# Animation rules\n");
     fprintf(fp, "# Format: animation = <type>, <enabled>, <duration_multiplier>, <curve>\n");
     fprintf(fp, "# Types: windows, fade\n");
-    fprintf(fp, "# Duration multiplier: 1 = 100ms, 2 = 200ms, 4 = 400ms\n");
-    fprintf(fp, "animation = windows, 1, 4, easeOutBack\n");
-    fprintf(fp, "animation = fade, 1, 3, easeOutQuint\n");
+    fprintf(fp, "# Duration is in milliseconds\n");
+    fprintf(fp, "animation = windows, 1, 200, easeOutBack\n");
+    fprintf(fp, "animation = fade, 1, 250, easeOutQuint\n");
     fprintf(fp, "\n");
     fprintf(fp, "# Blur rules\n");
     fprintf(fp, "# Format: blur = <pattern>, <radius>, <strength>\n");
