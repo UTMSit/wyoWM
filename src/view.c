@@ -12,6 +12,7 @@
 static void handle_map(struct wl_listener *listener, void *data);
 static void handle_unmap(struct wl_listener *listener, void *data);
 static void view_play_open_animation(View *view);
+static void view_play_close_animation(View *view);
 static void handle_destroy(struct wl_listener *listener, void *data);
 static void handle_commit(struct wl_listener *listener, void *data);
 static void handle_toplevel_destroy(struct wl_listener *listener, void *data);
@@ -662,8 +663,17 @@ static void handle_xwayland_unmap(struct wl_listener *listener, void *data) {
     if (view->server->shutting_down) return;
     if (!view->mapped) return;
     view->mapped = false;
+    bool animate_close = view->scene_tree &&
+                         view->scene_tree->node.enabled &&
+                         !view->server->shutting_down &&
+                         view->width > 0 &&
+                         view->height > 0;
+    if (animate_close) {
+        view->closing = true;
+        view_play_close_animation(view);
+    }
     server_view_unmapped(view->server, view);
-    if (view->scene_tree) {
+    if (!animate_close && view->scene_tree) {
         wlr_scene_node_set_enabled(&view->scene_tree->node, false);
     }
 }
@@ -1429,6 +1439,46 @@ static void view_play_open_animation(View *view) {
 	}
 }
 
+static void view_play_close_animation(View *view) {
+    if (!view || !view->server || view->server->shutting_down) return;
+    int fade_ms = 250;
+    int win_ms = 208;
+    EasingCurve fade_curve = EASING_EASE_OUT;
+    EasingCurve win_curve = EASING_EASE_OUT;
+    const BezierCurve *fade_bez = NULL;
+    const BezierCurve *win_bez = NULL;
+    for (int i = 0; i < view->server->config.anim_rule_count; i++) {
+        const ConfigAnimRule *rule = &view->server->config.anim_rules[i];
+        if (!rule->enabled) continue;
+        if (strcmp(rule->type, "fade") == 0) {
+            fade_ms = rule->duration_ms;
+            for (int j = 0; j < view->server->config.bezier_count; j++) {
+                if (strcmp(view->server->config.beziers[j].name, rule->curve_name) == 0) {
+                    fade_bez = &view->server->config.beziers[j].curve;
+                    fade_curve = EASING_BEZIER;
+                    break;
+                }
+            }
+        } else if (strcmp(rule->type, "windows") == 0) {
+            win_ms = rule->duration_ms;
+            for (int j = 0; j < view->server->config.bezier_count; j++) {
+                if (strcmp(view->server->config.beziers[j].name, rule->curve_name) == 0) {
+                    win_bez = &view->server->config.beziers[j].curve;
+                    win_curve = EASING_BEZIER;
+                    break;
+                }
+            }
+        }
+    }
+    if (fade_ms < 0) fade_ms = 0;
+    if (win_ms < 0) win_ms = 0;
+    animation_set_target(&view->opacity, 0.0, fade_ms, fade_curve, fade_bez);
+    animation_set_target(&view->anim_scale, 0.92, win_ms, win_curve, win_bez);
+    if (view->output) {
+        wlr_output_schedule_frame(view->output->wlr_output);
+    }
+}
+
 static void handle_map(struct wl_listener *listener, void *data) {
 	View *view = wl_container_of(listener, view, xdg.map);
 	(void)data;
@@ -1459,24 +1509,28 @@ static void handle_map(struct wl_listener *listener, void *data) {
 static void handle_unmap(struct wl_listener *listener, void *data) {
     View *view = wl_container_of(listener, view, xdg.unmap);
     (void)data;
-
     if (!view || !view->server) return;
     if (view->server->shutting_down) return;
     if (!view->mapped) return;
-
     view->mapped = false;
-
     if (view->fullscreen) {
         view->fullscreen = false;
         view->saved_tiled = false;
     }
-
+    bool animate_close = view->scene_tree &&
+                         view->scene_tree->node.enabled &&
+                         !view->server->shutting_down &&
+                         view->width > 0 &&
+                         view->height > 0;
+    if (animate_close) {
+        view->closing = true;
+        view_play_close_animation(view);
+    }
     server_view_unmapped(view->server, view);
     view_foreign_destroy(view);
-    if (view->scene_tree) {
+    if (!animate_close && view->scene_tree) {
         wlr_scene_node_set_enabled(&view->scene_tree->node, false);
     }
-
     view_refresh_decorations(view);
 }
 
@@ -1642,10 +1696,30 @@ void view_move_by(View *view, int dx, int dy) {
 
 bool view_frame_update(View *view, int64_t now_ms) {
     if (!view) return false;
-
     bool active = false;
-
-   	if (view->anim_x.active || view->anim_y.active || view->anim_w.active || view->anim_h.active || view->anim_scale.active) {
+    if (view->closing) {
+        bool anim_active = view->anim_x.active ||
+                           view->anim_y.active ||
+                           view->anim_w.active ||
+                           view->anim_h.active ||
+                           view->anim_scale.active ||
+                           view->opacity.active;
+        if (!anim_active) {
+            view->closing = false;
+            if (view->scene_tree) {
+                wlr_scene_node_set_enabled(&view->scene_tree->node, false);
+            }
+            if (view->root_tree) {
+                for (int i = 0; i < 4; i++) {
+                    if (view->border[i]) {
+                        wlr_scene_node_set_enabled(&view->border[i]->node, false);
+                    }
+                }
+            }
+            return false;
+        }
+    }
+    if (view->anim_x.active || view->anim_y.active || view->anim_w.active || view->anim_h.active || view->anim_scale.active) {
 		animation_update(&view->anim_x, now_ms);
 		animation_update(&view->anim_y, now_ms);
 		animation_update(&view->anim_w, now_ms);

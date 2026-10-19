@@ -61,6 +61,7 @@ typedef struct View {
     bool urgent;
     bool dragging;
     bool sticky;
+    bool closing;
 
     AnimatedValue opacity;
     AnimatedValue anim_x;
