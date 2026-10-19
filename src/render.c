@@ -864,13 +864,11 @@ static bool render_with_blur(struct Output *output, BlurRect *rects, int num_rec
 
 	bool blurred_ok = false;
 	if (src_fbo && dst_fbo && g_blur.initialized && blur_radius > 0) {
-		GLScope scope;
-		if (gl_scope_begin(server, &scope)) {
-			glFinish();
-			blurred_ok = blur_apply_full(&g_blur, src_fbo, dst_fbo, ow, oh, blur_radius);
-			glFinish();
-			gl_scope_end(server, &scope);
-		}
+	GLScope scope;
+        if (gl_scope_begin(server, &scope)) {
+            blurred_ok = blur_apply_full(&g_blur, src_fbo, dst_fbo, ow, oh, blur_radius);
+            gl_scope_end(server, &scope);
+        }
 	}
 
 	if (!blurred_ok) {

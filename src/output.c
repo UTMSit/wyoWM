@@ -26,7 +26,7 @@ static void handle_frame(struct wl_listener *listener, void *data) {
     bool active = false;
     View *view;
     wl_list_for_each(view, &server->views, link) {
-        if (view->output == output) {
+        if (view->output == output || view->closing_output == output) {
             if (view_frame_update(view, now)) {
                 active = true;
             }
@@ -35,7 +35,10 @@ static void handle_frame(struct wl_listener *listener, void *data) {
     if (output->wallpaper_fade_anim.active) {
         animation_update(&output->wallpaper_fade_anim, now);
         if (output->wallpaper_fade) {
-            wlr_scene_buffer_set_opacity(output->wallpaper_fade, (float)output->wallpaper_fade_anim.current);
+            float fade_opacity = (float)output->wallpaper_fade_anim.current;
+            if (fade_opacity < 0.0f) fade_opacity = 0.0f;
+            if (fade_opacity > 1.0f) fade_opacity = 1.0f;
+            wlr_scene_buffer_set_opacity(output->wallpaper_fade, fade_opacity);
         }
         if (animation_finished(&output->wallpaper_fade_anim)) {
             if (output->wallpaper_fade) {
@@ -292,6 +295,22 @@ void output_destroy(Output *output) {
     if (!output) return;
     Server *server = output->server;
     bool shutting_down = server->shutting_down;
+
+    View *v;
+    wl_list_for_each(v, &server->views, link) {
+        if (v->closing_output == output) {
+            v->closing = false;
+            v->closing_output = NULL;
+            if (v->closing_scene) {
+                wlr_scene_node_destroy(&v->closing_scene->node);
+                v->closing_scene = NULL;
+            }
+            if (v->close_buffer) {
+                wlr_buffer_unlock(v->close_buffer);
+                v->close_buffer = NULL;
+            }
+        }
+    }
 
     if (output->active_workspace) {
         workspace_hide(output->active_workspace);

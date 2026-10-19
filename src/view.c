@@ -415,8 +415,9 @@ static void handle_new_popup(struct wl_listener *listener, void *data) {
 static void apply_buffer_opacity(struct wlr_scene_buffer *buffer, int x, int y, void *data) {
     (void)x;
     (void)y;
-
     float opacity = *(const float *)data;
+    if (opacity < 0.0f) opacity = 0.0f;
+    if (opacity > 1.0f) opacity = 1.0f;
     wlr_scene_buffer_set_opacity(buffer, opacity);
 }
 
@@ -462,6 +463,19 @@ static struct wlr_scene_buffer *view_find_surface_buffer(View *view) {
 	}
 
 	return NULL;
+}
+
+static void view_cache_buffer(View *view) {
+    if (!view) return;
+    struct wlr_scene_buffer *sb = view_find_surface_buffer(view);
+    if (!sb || !sb->buffer) return;
+    if (view->close_buffer == sb->buffer) return;
+    struct wlr_buffer *old = view->close_buffer;
+    view->close_buffer = sb->buffer;
+    wlr_buffer_lock(sb->buffer);
+    if (old) {
+        wlr_buffer_unlock(old);
+    }
 }
 
 static void view_visual_size(View *view, int *w_out, int *h_out) {
@@ -527,11 +541,11 @@ static void view_update_border(View *view) {
 		focused_color = view->server->config.border_color_focused;
 		unfocused_color = view->server->config.border_color_unfocused;
 	}
-	bool enabled = border_width > 0 &&
-		view->mapped &&
-		!view->fullscreen &&
-		view->width > 0 &&
-		view->height > 0;
+ bool enabled = border_width > 0 &&
+                   (view->mapped || view->closing) &&
+                   !view->fullscreen &&
+                   view->width > 0 &&
+                   view->height > 0;
 	bool enabled_changed = false;
 	for (int i = 0; i < 4; i++) {
 		if (view->border[i] && view->border[i]->node.enabled != enabled) {
@@ -607,6 +621,7 @@ static void handle_xwayland_request_configure(struct wl_listener *listener, void
 static void handle_xwayland_request_activate(struct wl_listener *listener, void *data);
 static void handle_xwayland_request_close(struct wl_listener *listener, void *data);
 static void handle_xwayland_destroy(struct wl_listener *listener, void *data);
+static void handle_xwayland_commit(struct wl_listener *listener, void *data);
 
 static void handle_xwayland_associate(struct wl_listener *listener, void *data) {
     View *view = wl_container_of(listener, view, xwayland.associate);
@@ -625,6 +640,16 @@ static void handle_xwayland_associate(struct wl_listener *listener, void *data) 
     wl_signal_add(&xsurface->surface->events.map, &view->xwayland.map);
     view->xwayland.unmap.notify = handle_xwayland_unmap;
     wl_signal_add(&xsurface->surface->events.unmap, &view->xwayland.unmap);
+    wl_list_init(&view->xwayland.commit.link);
+    view->xwayland.commit.notify = handle_xwayland_commit;
+    wl_signal_add(&xsurface->surface->events.commit, &view->xwayland.commit);
+}
+
+static void handle_xwayland_commit(struct wl_listener *listener, void *data) {
+    View *view = wl_container_of(listener, view, xwayland.commit);
+    (void)data;
+    if (!view || !view->mapped) return;
+    view_cache_buffer(view);
 }
 
 static void handle_xwayland_dissociate(struct wl_listener *listener, void *data) {
@@ -632,6 +657,14 @@ static void handle_xwayland_dissociate(struct wl_listener *listener, void *data)
     (void)data;
     listener_remove(&view->xwayland.map);
     listener_remove(&view->xwayland.unmap);
+    listener_remove(&view->xwayland.commit);
+    view->closing = false;
+    view->closing_output = NULL;
+    view->closing_scene = NULL;
+    if (view->close_buffer) {
+        wlr_buffer_unlock(view->close_buffer);
+        view->close_buffer = NULL;
+    }
     if (view->scene_tree) {
         wlr_scene_node_destroy(&view->scene_tree->node);
         view->scene_tree = NULL;
@@ -663,19 +696,38 @@ static void handle_xwayland_unmap(struct wl_listener *listener, void *data) {
     if (view->server->shutting_down) return;
     if (!view->mapped) return;
     view->mapped = false;
-    bool animate_close = view->scene_tree &&
-                         view->scene_tree->node.enabled &&
-                         !view->server->shutting_down &&
+    struct wlr_scene_buffer *sb = view_find_surface_buffer(view);
+    struct wlr_buffer *buf = sb ? sb->buffer : NULL;
+    if (!buf) {
+        buf = view->close_buffer;
+    }
+    bool animate_close = buf != NULL &&
+                         view->root_tree &&
                          view->width > 0 &&
                          view->height > 0;
     if (animate_close) {
-        view->closing = true;
-        view_play_close_animation(view);
+        if (buf != view->close_buffer) {
+            struct wlr_buffer *old = view->close_buffer;
+            view->close_buffer = buf;
+            wlr_buffer_lock(buf);
+            if (old) {
+                wlr_buffer_unlock(old);
+            }
+        }
+        view->closing_scene = wlr_scene_buffer_create(view->root_tree, buf);
+        if (view->closing_scene) {
+            wlr_scene_buffer_set_dest_size(view->closing_scene, view->width, view->height);
+            view->closing = true;
+            view->closing_output = view->output;
+            view_play_close_animation(view);
+        } else {
+            view->closing = false;
+        }
     }
-    server_view_unmapped(view->server, view);
-    if (!animate_close && view->scene_tree) {
+    if (view->scene_tree) {
         wlr_scene_node_set_enabled(&view->scene_tree->node, false);
     }
+    server_view_unmapped(view->server, view);
 }
 
 static void handle_xwayland_request_configure(struct wl_listener *listener, void *data) {
@@ -779,6 +831,7 @@ View *view_create_xwayland(Server *server, struct wlr_xwayland_surface *xsurface
     wl_list_init(&view->xwayland.destroy.link);
     wl_list_init(&view->xwayland.map.link);
     wl_list_init(&view->xwayland.unmap.link);
+    wl_list_init(&view->xwayland.commit.link);
 
     view->xwayland.associate.notify = handle_xwayland_associate;
     wl_signal_add(&xsurface->events.associate, &view->xwayland.associate);
@@ -1191,9 +1244,9 @@ void view_set_geometry(View *view, int x, int y, int width, int height) {
 		}
 
 		if (view->server &&
-			(view->server->shutting_down || view->server->drag.view == view)) {
-			animate = false;
-		}
+            (view->server->shutting_down || view->server->drag.view == view || view->server->drag.active)) {
+            animate = false;
+        }
 	}
 
 	if (animate) {
@@ -1579,6 +1632,20 @@ static void handle_map(struct wl_listener *listener, void *data) {
 	(void)data;
 	if (!view || !view->server || view->server->shutting_down) return;
 
+ view->closing = false;
+    view->closing_output = NULL;
+    if (view->closing_scene) {
+        wlr_scene_node_destroy(&view->closing_scene->node);
+        view->closing_scene = NULL;
+    }
+    if (view->close_buffer) {
+        wlr_buffer_unlock(view->close_buffer);
+        view->close_buffer = NULL;
+    }
+    if (view->root_tree) {
+        wlr_scene_node_set_enabled(&view->root_tree->node, true);
+    }
+
 	view->mapped = true;
 
 	animation_set_target(&view->opacity, 0.0, 0, EASING_LINEAR, NULL);
@@ -1612,20 +1679,39 @@ static void handle_unmap(struct wl_listener *listener, void *data) {
         view->fullscreen = false;
         view->saved_tiled = false;
     }
-    bool animate_close = view->scene_tree &&
-                         view->scene_tree->node.enabled &&
-                         !view->server->shutting_down &&
+    struct wlr_scene_buffer *sb = view_find_surface_buffer(view);
+    struct wlr_buffer *buf = sb ? sb->buffer : NULL;
+    if (!buf) {
+        buf = view->close_buffer;
+    }
+    bool animate_close = buf != NULL &&
+                         view->root_tree &&
                          view->width > 0 &&
                          view->height > 0;
     if (animate_close) {
-        view->closing = true;
-        view_play_close_animation(view);
+        if (buf != view->close_buffer) {
+            struct wlr_buffer *old = view->close_buffer;
+            view->close_buffer = buf;
+            wlr_buffer_lock(buf);
+            if (old) {
+                wlr_buffer_unlock(old);
+            }
+        }
+        view->closing_scene = wlr_scene_buffer_create(view->root_tree, buf);
+        if (view->closing_scene) {
+            wlr_scene_buffer_set_dest_size(view->closing_scene, view->width, view->height);
+            view->closing = true;
+            view->closing_output = view->output;
+            view_play_close_animation(view);
+        } else {
+            view->closing = false;
+        }
+    }
+    if (view->scene_tree) {
+        wlr_scene_node_set_enabled(&view->scene_tree->node, false);
     }
     server_view_unmapped(view->server, view);
     view_foreign_destroy(view);
-    if (!animate_close && view->scene_tree) {
-        wlr_scene_node_set_enabled(&view->scene_tree->node, false);
-    }
     view_refresh_decorations(view);
 }
 
@@ -1654,6 +1740,7 @@ static void handle_commit(struct wl_listener *listener, void *data) {
     }
 
     if (view->mapped) {
+        view_cache_buffer(view);
         if (view->floating && !view->fullscreen && view->xdg.xdg_surface) {
             struct wlr_box geo = view->xdg.xdg_surface->current.geometry;
             if (geo.width > 0 && geo.height > 0 &&
@@ -1801,41 +1888,53 @@ bool view_frame_update(View *view, int64_t now_ms) {
                            view->opacity.active;
         if (!anim_active) {
             view->closing = false;
-            if (view->scene_tree) {
-                wlr_scene_node_set_enabled(&view->scene_tree->node, false);
+            view->closing_output = NULL;
+            if (view->closing_scene) {
+                wlr_scene_node_destroy(&view->closing_scene->node);
+                view->closing_scene = NULL;
             }
-            if (view->root_tree) {
-                for (int i = 0; i < 4; i++) {
-                    if (view->border[i]) {
-                        wlr_scene_node_set_enabled(&view->border[i]->node, false);
-                    }
+            if (view->close_buffer) {
+                wlr_buffer_unlock(view->close_buffer);
+                view->close_buffer = NULL;
+            }
+            for (int i = 0; i < 4; i++) {
+                if (view->border[i]) {
+                    wlr_scene_node_set_enabled(&view->border[i]->node, false);
                 }
             }
             return false;
         }
+        active = true;
     }
     if (view->anim_x.active || view->anim_y.active || view->anim_w.active || view->anim_h.active || view->anim_scale.active) {
-		animation_update(&view->anim_x, now_ms);
-		animation_update(&view->anim_y, now_ms);
-		animation_update(&view->anim_w, now_ms);
-		animation_update(&view->anim_h, now_ms);
-		animation_update(&view->anim_scale, now_ms);
-		view_apply_geometry(view);
-		view_update_border(view);
-		active = true;
-	}
-
+        animation_update(&view->anim_x, now_ms);
+        animation_update(&view->anim_y, now_ms);
+        animation_update(&view->anim_w, now_ms);
+        animation_update(&view->anim_h, now_ms);
+        animation_update(&view->anim_scale, now_ms);
+        view_apply_geometry(view);
+        view_update_border(view);
+        active = true;
+    }
     if (view->opacity.active) {
         animation_update(&view->opacity, now_ms);
         view_apply_opacity(view);
         active = true;
     }
-
     if (view->border_blend.active) {
         animation_update(&view->border_blend, now_ms);
         view_update_border(view);
         active = true;
     }
-
+    if (view->closing && view->closing_scene) {
+        int vw = 0;
+        int vh = 0;
+        view_visual_size(view, &vw, &vh);
+        wlr_scene_buffer_set_dest_size(view->closing_scene, vw, vh);
+        float close_opacity = (float)view->opacity.current;
+        if (close_opacity < 0.0f) close_opacity = 0.0f;
+        if (close_opacity > 1.0f) close_opacity = 1.0f;
+        wlr_scene_buffer_set_opacity(view->closing_scene, close_opacity);
+    }
     return active;
 }

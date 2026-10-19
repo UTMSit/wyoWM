@@ -1068,6 +1068,7 @@ static void handle_cursor_button(struct wl_listener *listener, void *data) {
 
                 server->drag.active = true;
                 server->drag.view = view;
+                view->dragging = true;
                 server->drag.output = view->output;
                 server->drag.grab_x = server->cursor->x;
                 server->drag.grab_y = server->cursor->y;
@@ -1122,6 +1123,7 @@ static void handle_cursor_button(struct wl_listener *listener, void *data) {
         bool restore_tiled = server->drag.restore_tiled;
 
         if (view) {
+            view->dragging = false;
             Output *target = output_at(server, server->cursor->x, server->cursor->y);
 
             if (target && target != view->output) {

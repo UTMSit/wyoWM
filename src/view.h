@@ -62,6 +62,9 @@ typedef struct View {
     bool dragging;
     bool sticky;
     bool closing;
+    struct Output *closing_output;
+    struct wlr_buffer *close_buffer;
+    struct wlr_scene_buffer *closing_scene;
 
     AnimatedValue opacity;
     AnimatedValue anim_x;
@@ -76,8 +79,8 @@ typedef struct View {
             struct wlr_xdg_toplevel *toplevel;
             struct wl_listener map;
             struct wl_listener unmap;
-            struct wl_listener destroy;
             struct wl_listener commit;
+            struct wl_listener destroy;
          	struct wl_listener toplevel_destroy;
 			struct wl_listener request_fullscreen;
 			struct wl_listener request_move;
@@ -88,16 +91,17 @@ typedef struct View {
 
         #if defined(WYO_HAS_XWAYLAND)
         struct {
-        struct wlr_xwayland_surface *xsurface;
-        struct wl_listener associate;
-        struct wl_listener dissociate;
-        struct wl_listener request_configure;
-        struct wl_listener request_activate;
-        struct wl_listener request_close;
-        struct wl_listener request_fullscreen;
-        struct wl_listener destroy;
-        struct wl_listener map;
-        struct wl_listener unmap;
+            struct wlr_xwayland_surface *xsurface;
+            struct wl_listener associate;
+            struct wl_listener dissociate;
+            struct wl_listener request_configure;
+            struct wl_listener request_activate;
+            struct wl_listener request_close;
+            struct wl_listener request_fullscreen;
+            struct wl_listener destroy;
+            struct wl_listener map;
+            struct wl_listener unmap;
+            struct wl_listener commit;
         } xwayland;
         #endif
     };
