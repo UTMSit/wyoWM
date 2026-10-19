@@ -351,7 +351,91 @@ static void parse_general_line(Config *config, const char *key, const char *valu
         config->cursor_size = size;
     } else if (!strcasecmp(key, "output")) {
         parse_output_line(config, value);
+    } else if (!strcasecmp(key, "smart_gaps")) {
+        config->smart_gaps = atoi(value) != 0;
     }
+}
+
+static void parse_window_rule(Config *config, const char *value) {
+    if (!value || !*value) return;
+    if (config->window_rule_count >= MAX_WINDOW_RULES) return;
+    char *copy = strdup(value);
+    if (!copy) return;
+    char *comma = strchr(copy, ',');
+    if (!comma) {
+        free(copy);
+        return;
+    }
+    *comma = '\0';
+    char *action_str = trim(copy);
+    char *match_str = trim(comma + 1);
+    if (!*action_str || !*match_str) {
+        free(copy);
+        return;
+    }
+    WindowRuleAction action;
+    int arg = 0;
+    if (!strcasecmp(action_str, "float")) {
+        action = WINDOW_RULE_ACTION_FLOAT;
+    } else if (!strcasecmp(action_str, "tile")) {
+        action = WINDOW_RULE_ACTION_TILE;
+    } else if (!strcasecmp(action_str, "sticky")) {
+        action = WINDOW_RULE_ACTION_STICKY;
+    } else if (!strcasecmp(action_str, "fullscreen")) {
+        action = WINDOW_RULE_ACTION_FULLSCREEN;
+    } else if (!strcasecmp(action_str, "center")) {
+        action = WINDOW_RULE_ACTION_CENTER;
+    } else if (!strncasecmp(action_str, "workspace", 9) &&
+               (action_str[9] == '\0' || isspace((unsigned char)action_str[9]))) {
+        char *num = trim(action_str + 9);
+        char *end = NULL;
+        long id = strtol(num, &end, 10);
+        if (end == num || *end != '\0') {
+            free(copy);
+            return;
+        }
+        if (id == 0) id = 10;
+        if (id < 1 || id > 10) {
+            free(copy);
+            return;
+        }
+        action = WINDOW_RULE_ACTION_WORKSPACE;
+        arg = (int)id;
+    } else {
+        free(copy);
+        return;
+    }
+    WindowRuleMatchType match_type;
+    const char *pattern = match_str;
+    if (!strncasecmp(pattern, "app_id:", 7)) {
+        match_type = WINDOW_RULE_MATCH_APP_ID;
+        pattern += 7;
+    } else if (!strncasecmp(pattern, "class:", 6)) {
+        match_type = WINDOW_RULE_MATCH_CLASS;
+        pattern += 6;
+    } else if (!strncasecmp(pattern, "instance:", 9)) {
+        match_type = WINDOW_RULE_MATCH_INSTANCE;
+        pattern += 9;
+    } else if (!strncasecmp(pattern, "title:", 6)) {
+        match_type = WINDOW_RULE_MATCH_TITLE;
+        pattern += 6;
+    } else {
+        free(copy);
+        return;
+    }
+    while (*pattern == ' ' || *pattern == '\t') {
+        pattern++;
+    }
+    if (!*pattern) {
+        free(copy);
+        return;
+    }
+    ConfigWindowRule *rule = &config->window_rules[config->window_rule_count++];
+    rule->match_type = match_type;
+    snprintf(rule->pattern, sizeof(rule->pattern), "%s", pattern);
+    rule->action = action;
+    rule->arg = arg;
+    free(copy);
 }
 
 static void parse_config_line(Config *config, const char *line) {
@@ -475,6 +559,8 @@ static void parse_config_line(Config *config, const char *line) {
     } else if (!strncasecmp(left, "general.", 8)) {
         char *key = left + 8;
         parse_general_line(config, key, right);
+    } else if (!strncasecmp(left, "windowrule", 10) && left[10] == '\0') {
+        parse_window_rule(config, right);
     } else if (!strcasecmp(left, "exec-once") || !strcasecmp(left, "exec_once")) {
         ConfigExecOnce *exec = calloc(1, sizeof(ConfigExecOnce));
         if (exec) {
@@ -604,6 +690,7 @@ void config_init_defaults(Config *config) {
     config->background_color[1] = 0.05f;
     config->background_color[2] = 0.07f;
     config->background_color[3] = 1.0f;
+    config->smart_gaps = false;
     snprintf(config->kb_rules, sizeof(config->kb_rules), "evdev");
     snprintf(config->kb_model, sizeof(config->kb_model), "pc105");
     snprintf(config->kb_layouts, sizeof(config->kb_layouts), "us");
@@ -780,6 +867,16 @@ bool config_generate_default(const char *path) {
     fprintf(fp, "# Cursor\n");
     fprintf(fp, "general.cursor_theme = default\n");
     fprintf(fp, "general.cursor_size = 24\n");
+    fprintf(fp, "\n");
+    fprintf(fp, "general.smart_gaps = 0\n");
+    fprintf(fp, "\n");
+    fprintf(fp, "# Window rules\n");
+    fprintf(fp, "# Format: windowrule = <action>, <match>:<pattern>\n");
+    fprintf(fp, "# Actions: float, tile, sticky, fullscreen, center, workspace N\n");
+    fprintf(fp, "# Match: app_id:<name>, class:<name>, instance:<name>, title:<name>\n");
+    fprintf(fp, "# Pattern * matches any value\n");
+    fprintf(fp, "# windowrule = float, app_id:pavucontrol\n");
+    fprintf(fp, "# windowrule = workspace 3, app_id:firefox\n");
     fprintf(fp, "\n");
     fprintf(fp, "# Output configuration\n");
     fprintf(fp, "# Format: general.output = <name>,<mode>,<position>\n");

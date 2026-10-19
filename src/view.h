@@ -139,6 +139,7 @@ void view_refresh_decorations(View *view);
 void view_update_scene_parent(View *view);
 bool view_frame_update(View *view, int64_t now_ms);
 void view_foreign_sync(View *view);
+void view_apply_window_rules(View *view);
 #if defined(WYO_HAS_XWAYLAND)
 View *view_create_xwayland(struct Server *server, struct wlr_xwayland_surface *xsurface);
 #endif

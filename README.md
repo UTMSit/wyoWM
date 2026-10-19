@@ -101,10 +101,11 @@ Whitespace around `=` is ignored.
 | `cursor_theme` | string | Cursor theme name |
 | `cursor_size` | integer | Cursor size in pixels |
 | `sticky` | string | Comma-separated app_id list for sticky windows |
+| `smart_gaps` | integer | 1 removes outer gaps when workspace has one tiled window |
 
 Example:
 
-```ini
+```conf
 general.border_width = 2
 general.border_color_focused = 0x4d80ff
 general.border_color_unfocused = 0x333333
@@ -136,7 +137,7 @@ Format: `general.output = <name>,<mode>,<position>`
 
 Examples:
 
-```ini
+```conf
 # Use preferred mode, position at origin
 general.output = HDMI-A-1,preferable,0x0
 
@@ -152,6 +153,41 @@ general.output = DP-2,preferable,0x1440
 
 Use `wlr-randr` to get output names and available modes.
 
+### Window rules
+
+Apply actions to windows at map time.
+
+Format: `windowrule = <action>, <match>:<pattern>`
+
+Actions:
+
+| Action | Description |
+|--------|-------------|
+| `float` | open as floating, centered |
+| `tile` | open as tiled |
+| `sticky` | open as sticky on all workspaces |
+| `fullscreen` | open fullscreen |
+| `center` | center the window |
+| `workspace N` | assign window to workspace N (1 to 10, opens in background if workspace is hidden) |
+
+Match types:
+
+- `app_id:<name>` - XDG app_id
+- `class:<name>` - X11 WM_CLASS
+- `instance:<name>` - X11 instance
+- `title:<name>` - window title
+
+Pattern `*` matches any value. Rules apply in config order.
+
+Example:
+
+```conf
+windowrule = float, app_id:pavucontrol
+windowrule = float, class:Steam
+windowrule = workspace 3, app_id:firefox
+windowrule = sticky, app_id:vult
+```
+
 ### Animation curves
 
 Define custom cubic bezier easing curves.
@@ -162,7 +198,7 @@ Control points p1 and p2 define curve shape. Values typically 0.0 to 1.0 but can
 
 Example:
 
-```ini
+```conf
 bezier = easeOutBack, 0.34, 1.56, 0.64, 1.0
 bezier = easeOutQuint, 0.22, 1.0, 0.36, 1.0
 bezier = mySmoothCurve, 0.0, 0.0, 0.2, 1.0
@@ -183,7 +219,7 @@ Format: `animation = <type>, <enabled>, <duration_multiplier>, <curve>`
 
 Example:
 
-```ini
+```conf
 animation = windows, 1, 4, easeOutBack
 animation = fade, 1, 3, easeOutQuint
 ```
@@ -210,7 +246,7 @@ Pattern prefixes:
 
 Example:
 
-```ini
+```conf
 blur = app_id:kitty, 6, 1.0
 blur = class:firefox, 8, 0.8
 blur = namespace:waybar, 4, 0.6
@@ -256,7 +292,7 @@ Combine multiple modifiers with dots: `bind.super.shift.c`
 
 Example:
 
-```ini
+```conf
 bind.super.q = exec kitty
 bind.super.e = exec nautilus
 bind.super.c = close
@@ -287,7 +323,7 @@ Format: `exec-once = <command>`
 
 Example:
 
-```ini
+```conf
 exec-once = waybar
 exec-once = mako
 exec-once = fcitx5

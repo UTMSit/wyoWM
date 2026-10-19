@@ -588,7 +588,11 @@ void server_view_mapped(Server *server, View *view) {
         }
     }
 
-    server_focus_view(server, view);
+    view_apply_window_rules(view);
+
+    if (view->output) {
+        server_focus_view(server, view);
+    }
     server_arrange(server);
 
     if (view->type == VIEW_TYPE_XDG &&
@@ -951,7 +955,22 @@ void server_arrange(Server *server) {
     wl_list_for_each(output, &server->outputs, link) {
         Workspace *ws = output->active_workspace;
         if (!ws) continue;
-        dwindle_set_gaps(&ws->layout, server->config.gaps_in, server->config.gaps_out);
+
+        int gaps_out = server->config.gaps_out;
+        if (server->config.smart_gaps) {
+            int tiled_count = 0;
+            View *v;
+            wl_list_for_each(v, &server->views, link) {
+                if (v->workspace == ws && v->tiled && v->mapped) {
+                    tiled_count++;
+                }
+            }
+            if (tiled_count == 1) {
+                gaps_out = server->config.border_width;
+            }
+        }
+
+        dwindle_set_gaps(&ws->layout, server->config.gaps_in, gaps_out);
         ws->layout.origin_x = output->usable_x;
         ws->layout.origin_y = output->usable_y;
         int width = output->usable_width > 0 ? output->usable_width : output->width;

@@ -1380,6 +1380,101 @@ static void check_sticky(View *view) {
 	}
 }
 
+static bool window_rule_pattern_match(const char *pattern, const char *value) {
+    if (!pattern || !value || !*pattern || !*value) return false;
+    if (strcmp(pattern, "*") == 0) return true;
+    return strcasecmp(pattern, value) == 0;
+}
+
+static const char *view_rule_match_value(View *view, WindowRuleMatchType type) {
+    if (!view) return NULL;
+    if (view->type == VIEW_TYPE_XDG && view->xdg.toplevel) {
+        if (type == WINDOW_RULE_MATCH_APP_ID) return view->xdg.toplevel->app_id;
+        if (type == WINDOW_RULE_MATCH_TITLE) return view->xdg.toplevel->title;
+        return NULL;
+    }
+#if defined(WYO_HAS_XWAYLAND)
+    if (view->type == VIEW_TYPE_XWAYLAND && view->xwayland.xsurface) {
+        if (type == WINDOW_RULE_MATCH_CLASS) return view->xwayland.xsurface->class;
+        if (type == WINDOW_RULE_MATCH_INSTANCE) return view->xwayland.xsurface->instance;
+        if (type == WINDOW_RULE_MATCH_TITLE) return view->xwayland.xsurface->title;
+        return NULL;
+    }
+#endif
+    return NULL;
+}
+
+void view_apply_window_rules(View *view) {
+    if (!view || !view->server || view->server->shutting_down) return;
+    Server *server = view->server;
+    if (server->config.window_rule_count <= 0) return;
+    for (int i = 0; i < server->config.window_rule_count; i++) {
+        const ConfigWindowRule *rule = &server->config.window_rules[i];
+        const char *value = view_rule_match_value(view, rule->match_type);
+        if (!window_rule_pattern_match(rule->pattern, value)) continue;
+        switch (rule->action) {
+        case WINDOW_RULE_ACTION_FLOAT:
+            if (view->tiled && view->workspace) {
+                dwindle_remove_view(&view->workspace->layout, view);
+                view->tiled = false;
+            }
+            view->floating = true;
+            if (view->output) {
+                int width = view->width > 0 ? view->width : 640;
+                int height = view->height > 0 ? view->height : 480;
+                int x = (view->output->width - width) / 2;
+                int y = (view->output->height - height) / 2;
+                if (x < 0) x = 0;
+                if (y < 0) y = 0;
+                view_set_geometry(view, x, y, width, height);
+            }
+            break;
+        case WINDOW_RULE_ACTION_TILE:
+            if (view->floating && view->workspace) {
+                view->floating = false;
+                dwindle_add_view(&view->workspace->layout, view);
+                view->tiled = true;
+            }
+            break;
+        case WINDOW_RULE_ACTION_STICKY:
+            view->sticky = true;
+            view->floating = true;
+            if (view->tiled && view->workspace) {
+                dwindle_remove_view(&view->workspace->layout, view);
+                view->tiled = false;
+            }
+            if (view->workspace) {
+                workspace_remove_view(view->workspace, view);
+                view->workspace = NULL;
+            }
+            break;
+        case WINDOW_RULE_ACTION_FULLSCREEN:
+            if (!view->fullscreen && view->mapped) {
+                view_toggle_fullscreen(view);
+            }
+            break;
+        case WINDOW_RULE_ACTION_CENTER:
+            view_center(view);
+            break;
+        case WINDOW_RULE_ACTION_WORKSPACE: {
+            Workspace *ws = workspace_find(server, rule->arg);
+            if (!ws || view->workspace == ws) break;
+            if (view->workspace) {
+                workspace_remove_view(view->workspace, view);
+            }
+            view->floating = false;
+            view->sticky = false;
+            workspace_add_view(ws, view);
+            view->tiled = true;
+            if (!ws->output && view->root_tree) {
+                wlr_scene_node_set_enabled(&view->root_tree->node, false);
+            }
+            break;
+        }
+        }
+    }
+}
+
 static void view_play_open_animation(View *view) {
 	if (!view || !view->server || view->server->shutting_down) return;
 

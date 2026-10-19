@@ -12,6 +12,7 @@
 #define MAX_ANIM_RULES 16
 #define MAX_BLUR_RULES 32
 #define MAX_OUTPUT_RULES 16
+#define MAX_WINDOW_RULES 64
 
 typedef struct ConfigOutputRule {
     char name[64];
@@ -38,6 +39,29 @@ typedef struct {
     int radius;
     double strength;
 } ConfigBlurRule;
+
+typedef enum {
+    WINDOW_RULE_MATCH_APP_ID,
+    WINDOW_RULE_MATCH_CLASS,
+    WINDOW_RULE_MATCH_INSTANCE,
+    WINDOW_RULE_MATCH_TITLE
+} WindowRuleMatchType;
+
+typedef enum {
+    WINDOW_RULE_ACTION_FLOAT,
+    WINDOW_RULE_ACTION_TILE,
+    WINDOW_RULE_ACTION_STICKY,
+    WINDOW_RULE_ACTION_FULLSCREEN,
+    WINDOW_RULE_ACTION_CENTER,
+    WINDOW_RULE_ACTION_WORKSPACE
+} WindowRuleAction;
+
+typedef struct {
+    WindowRuleMatchType match_type;
+    char pattern[128];
+    WindowRuleAction action;
+    int arg;
+} ConfigWindowRule;
 
 typedef struct {
     char name[64];
@@ -126,6 +150,9 @@ typedef struct Config {
     int anim_rule_count;
     ConfigOutputRule output_rules[MAX_OUTPUT_RULES];
     int output_rule_count;
+    ConfigWindowRule window_rules[MAX_WINDOW_RULES];
+    int window_rule_count;
+    bool smart_gaps;
 } Config;
 
 void config_init_defaults(Config *config);
