@@ -13,6 +13,7 @@
 #include <wlr/types/wlr_data_device.h>
 #include <wlr/types/wlr_output.h>
 #include <wlr/types/wlr_output_layout.h>
+#include <wlr/types/wlr_output_management_v1.h>
 #include <wlr/types/wlr_scene.h>
 #include <wlr/types/wlr_xdg_shell.h>
 #include <wlr/types/wlr_pointer_constraints_v1.h>
@@ -21,6 +22,7 @@
 #include <wlr/types/wlr_xcursor_manager.h>
 #include <wlr/types/wlr_xdg_activation_v1.h>
 #include <wlr/types/wlr_relative_pointer_v1.h>
+
 #if __has_include(<wlr/types/wlr_xdg_output_v1.h>)
 #include <wlr/types/wlr_xdg_output_v1.h>
 #elif __has_include(<wlr/types/wlr_xdg_output_manager_v1.h>)
@@ -36,6 +38,7 @@
 #include <wlr/types/wlr_foreign_toplevel_management_v1.h>
 #define WYO_HAS_FOREIGN_TOPLEVEL 1
 #endif
+
 #include "ipc.h"
 #include "workspace.h"
 #include "ext_workspace.h"
@@ -51,6 +54,7 @@ struct wlr_surface;
 struct wlr_layer_shell_v1;
 struct wlr_buffer;
 struct wlr_drag;
+
 struct View *output_fullscreen_view(struct Output *output);
 
 typedef struct DragState {
@@ -80,16 +84,13 @@ typedef struct PopupSurface {
 typedef struct Server {
     struct wl_display *display;
     struct wl_event_loop *loop;
-
     struct wlr_backend *backend;
     struct wlr_session *session;
     struct wlr_renderer *renderer;
     struct wlr_allocator *allocator;
-
     struct wlr_compositor *compositor;
     struct wlr_subcompositor *subcompositor;
     struct wlr_data_device_manager *data_device_manager;
-
     struct wlr_output_layout *output_layout;
     struct wlr_scene *scene;
     struct wlr_scene_tree *scene_tree;
@@ -100,10 +101,8 @@ typedef struct Server {
     struct wlr_scene_tree *fullscreen_tree;
     struct wlr_scene_output_layout *scene_layout;
     struct wlr_scene_rect *background;
-
     struct wlr_xdg_shell *xdg_shell;
     struct wlr_seat *seat;
-
     struct wlr_cursor *cursor;
     struct wlr_xcursor_manager *xcursor_manager;
     struct wlr_keyboard *active_keyboard;
@@ -111,78 +110,71 @@ typedef struct Server {
     struct wlr_relative_pointer_manager_v1 *relative_pointer_manager;
     struct wlr_pointer_constraints_v1 *pointer_constraints;
     struct wl_listener new_constraint;
-	struct wl_listener xdg_activation_request_activate;
-
+    struct wl_listener xdg_activation_request_activate;
     struct wl_list outputs;
     struct wl_list views;
     struct wl_list workspaces;
     struct wl_list keyboards;
     struct wl_list layer_surfaces;
     struct wl_list popup_surfaces;
-
     View *focused_view;
     struct wlr_surface *focused_surface;
     struct wl_listener focused_surface_destroy;
     Output *active_output;
-
     DragState drag;
-
     bool shutting_down;
-
     struct wl_listener new_output;
     struct wl_listener new_toplevel;
     struct wl_listener new_input;
     struct wl_listener new_layer_surface;
-
     struct wl_listener cursor_motion;
     struct wl_listener cursor_motion_absolute;
     struct wl_listener cursor_button;
     struct wl_listener cursor_axis;
-
     IPCServer ipc;
     struct wlr_layer_shell_v1 *layer_shell;
     void *xdg_output_manager;
-    #if defined(WYO_HAS_FOREIGN_TOPLEVEL)
+#if defined(WYO_HAS_FOREIGN_TOPLEVEL)
     struct wlr_foreign_toplevel_manager_v1 *foreign_toplevel_manager;
-    #endif
-
+#endif
     struct wlr_xdg_decoration_manager_v1 *xdg_decoration_manager;
-    #if defined(WYO_HAS_XWAYLAND)
-        struct wlr_xwayland *xwayland;
-        struct wl_listener xwayland_ready;
-        struct wl_listener xwayland_new_surface;
-        struct wl_listener xwayland_destroy;
-    #endif
+#if defined(WYO_HAS_XWAYLAND)
+    struct wlr_xwayland *xwayland;
+    struct wl_listener xwayland_ready;
+    struct wl_listener xwayland_new_surface;
+    struct wl_listener xwayland_destroy;
+#endif
     struct wl_listener new_xdg_decoration;
     struct wl_listener request_set_selection;
     struct wl_listener request_set_cursor;
     struct wl_listener request_start_drag;
-	struct wl_listener start_drag;
-	struct wl_listener drag_focus;
-	struct wl_listener drag_motion;
-	struct wl_listener drag_drop;
-	struct wl_listener drag_destroy;
-	struct wlr_scene_tree *drag_icon_tree;
-	bool dnd_active;
-	bool cursor_hidden;
-	bool cursor_restore_pending;
-	bool client_cursor_hidden;
-	int64_t client_cursor_hidden_time;
-	struct wlr_pointer_constraint_v1 *active_constraint;
-	struct wlr_cursor_shape_manager_v1 *cursor_shape_manager;
-	struct wl_listener request_set_cursor_shape;
-	struct wl_listener constraint_destroy;
-	struct wlr_drag *dnd_drag;
-
+    struct wl_listener start_drag;
+    struct wl_listener drag_focus;
+    struct wl_listener drag_motion;
+    struct wl_listener drag_drop;
+    struct wl_listener drag_destroy;
+    struct wlr_scene_tree *drag_icon_tree;
+    bool dnd_active;
+    bool cursor_hidden;
+    bool cursor_restore_pending;
+    bool client_cursor_hidden;
+    int64_t client_cursor_hidden_time;
+    struct wlr_pointer_constraint_v1 *active_constraint;
+    struct wlr_cursor_shape_manager_v1 *cursor_shape_manager;
+    struct wl_listener request_set_cursor_shape;
+    struct wl_listener constraint_destroy;
+    struct wlr_drag *dnd_drag;
     struct wlr_ext_workspace_manager_v1 *ext_workspace_manager;
     struct wlr_ext_workspace_group_handle_v1 *ext_workspace_group;
     struct wl_listener ext_workspace_commit;
     struct wl_listener ext_workspace_destroy_listener;
-
+    struct wlr_output_manager_v1 *output_manager;
+    struct wl_listener output_manager_apply;
+    struct wl_listener output_manager_test;
+    struct wl_listener output_manager_destroy;
     Config config;
     int reload_fd;
     struct wl_event_source *reload_source;
-
     struct wlr_buffer *wallpaper_buffer;
     int wallpaper_width;
     int wallpaper_height;
@@ -191,7 +183,6 @@ typedef struct Server {
 bool server_init(Server *server);
 void server_run(Server *server);
 void server_destroy(Server *server);
-
 void server_view_mapped(Server *server, View *view);
 void server_view_unmapped(Server *server, View *view);
 void server_view_destroyed(Server *server, View *view);
@@ -199,4 +190,7 @@ void server_focus_view(struct Server *server, View *view);
 void server_focus_surface(struct Server *server, struct wlr_surface *surface);
 void server_arrange(struct Server *server);
 void server_reload_config(struct Server *server);
+void server_update_output_manager_config(struct Server *server);
+void server_apply_output_rules(struct Server *server);
+
 #endif

@@ -1,28 +1,29 @@
 # wyoWM
 
-wyoWM is a Wayland compositor. It is based on wlroots 0.20. It uses a dwindle tiling layout. It is written in C.
+Wayland compositor based on wlroots 0.20. Uses dwindle tiling layout. Written in C.
 
 ## Features
 
-- Dwindle tiling layout.
-- Directional focus, move, resize, and swap.
-- 10 workspaces. A workspace remembers its last output.
-- Multi-monitor support.
-- Floating and fullscreen windows.
-- Pointer drag: Super + left button moves a window, Super + right button resizes it.
-- Borders, gaps, corner radius, and opacity.
-- Fully customizable animations with cubic bezier curves.
-- Wallpaper with fill, fit, stretch, and center modes.
-- Text config with hot reload.
-- XKB layout config for keyboard switching.
-- IPC socket and the wyoctl tool.
-- Layer shell support for bars and menus.
-- XWayland support for legacy X11 applications.
-- Tearing control protocol for gaming.
+- Dwindle tiling layout
+- Directional focus, move, resize, and swap
+- 10 workspaces with last-output memory
+- Multi-monitor support with configurable output positions
+- Floating and fullscreen windows
+- Pointer drag: Super + left button moves, Super + right button resizes
+- Borders, gaps, corner radius, and opacity
+- Customizable animations with cubic bezier curves
+- Wallpaper with fill, fit, stretch, and center modes
+- Text config with hot reload
+- XKB layout config for keyboard switching
+- IPC socket and wyoctl tool
+- Layer shell support for bars and menus
+- XWayland support for legacy X11 applications
+- Tearing control protocol for gaming
+- Output management protocol (wlr-randr compatible)
 
 ## Protocols
 
-xdg-shell, layer-shell, ext-workspace, foreign-toplevel, screencopy, viewporter, fractional-scale, xdg-activation, relative-pointer, pointer-gestures, presentation-time, xdg-decoration (server side), xdg-output, tearing-control.
+xdg-shell, layer-shell, ext-workspace, foreign-toplevel, screencopy, viewporter, fractional-scale, xdg-activation, relative-pointer, pointer-gestures, presentation-time, xdg-decoration (server side), xdg-output, tearing-control, wlr-output-management.
 
 ## Requirements
 
@@ -36,140 +37,303 @@ xdg-shell, layer-shell, ext-workspace, foreign-toplevel, screencopy, viewporter,
 
 ## Build and install
 
-    umk update
+```bash
+umk update
+```
 
-This command builds wyowm and wyoctl, installs the binaries, and installs the session files.
+Builds wyowm and wyoctl, installs binaries and session files.
 
 Other targets:
 
-    umk build
-    umk install
-    umk clean
-    umk uninstall
+```bash
+umk build
+umk install
+umk clean
+umk uninstall
+```
 
 ## Installed files
 
-- /usr/local/bin/wyowm
-- /usr/local/bin/wyoctl
-- /usr/local/bin/wyowm-session
-- /usr/local/bin/wyoconf-reload
-- /usr/share/wayland-sessions/wyowm.desktop
+- `/usr/local/bin/wyowm`
+- `/usr/local/bin/wyoctl`
+- `/usr/local/bin/wyowm-session`
+- `/usr/local/bin/wyoconf-reload`
+- `/usr/share/wayland-sessions/wyowm.desktop`
 
 ## Start
 
-Select wyoWM in the display manager. Or run wyowm-session from a TTY.
+Select wyoWM in display manager or run `wyowm-session` from TTY.
 
-## Config
+## Configuration
 
-The config file is ~/.config/wyoWM/wyowm.conf. The compositor reads it at start. Use wyoconf-reload to apply changes without a restart.
+Config file: `~/.config/wyoWM/wyowm.conf`
 
-### Animations
+Compositor creates default config on first run if file does not exist. Reload without restart: `wyoconf-reload` or send SIGUSR1.
 
-wyoWM supports Hyprland-style animation configuration using custom cubic bezier curves.
+### Syntax
 
-#### Bezier curves
+Lines use format: `key = value`
 
-Define custom easing curves with 4 control points.
+Comments start with `#`.
 
-    bezier = <name>, <p1x>, <p1y>, <p2x>, <p2y>
+Whitespace around `=` is ignored.
+
+### General settings
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `border_width` | integer | Border width in pixels |
+| `border_color_focused` | hex | Focused window border color (0xRRGGBB or 0xRRGGBBAA) |
+| `border_color_unfocused` | hex | Unfocused window border color |
+| `background_color` | hex | Desktop background color |
+| `gaps_in` | integer | Gaps between tiled windows |
+| `gaps_out` | integer | Gaps around screen edges |
+| `corner_radius` | number | Window corner radius |
+| `active_opacity` | float | Opacity for focused windows (0.0 to 1.0) |
+| `inactive_opacity` | float | Opacity for unfocused windows (0.0 to 1.0) |
+| `wallpaper` | path | Wallpaper image path (~ expands to $HOME) |
+| `wallpaper_mode` | string | fill, fit, stretch, center, tile |
+| `kb_layouts` | string | XKB layout list (e.g., us,ru) |
+| `kb_variant` | string | XKB variant |
+| `kb_options` | string | XKB options (e.g., grp:alt_shift_toggle) |
+| `kb_model` | string | XKB keyboard model |
+| `kb_rules` | string | XKB rules |
+| `cursor_theme` | string | Cursor theme name |
+| `cursor_size` | integer | Cursor size in pixels |
+| `sticky` | string | Comma-separated app_id list for sticky windows |
 
 Example:
 
-    bezier = easeOutBack, 0.34, 1.56, 0.64, 1.0
-    bezier = easeOutQuint, 0.22, 1.0, 0.36, 1.0
-    bezier = mySmoothCurve, 0.0, 0.0, 0.2, 1.0
+```ini
+general.border_width = 2
+general.border_color_focused = 0x4d80ff
+general.border_color_unfocused = 0x333333
+general.background_color = 0x0a0d12
+general.gaps_in = 4
+general.gaps_out = 8
+general.corner_radius = 0
+general.active_opacity = 1.0
+general.inactive_opacity = 1.0
+general.wallpaper = ~/Pictures/wallpaper.png
+general.wallpaper_mode = fill
+general.kb_layouts = us,ru
+general.kb_options = grp:alt_shift_toggle
+general.cursor_theme = default
+general.cursor_size = 24
+```
 
-#### Animation rules
+### Output configuration
 
-Apply curves to specific animation types.
+Configure monitor position, resolution, and refresh rate.
 
-    animation = <type>, <enabled>, <speed>, <curve>
+Format: `general.output = <name>,<mode>,<position>`
 
-- `type`: `windows` (geometry/movement), `fade` (opacity/borders), `workspaces` (switching).
-- `enabled`: `1` to enable, `0` to disable.
-- `speed`: duration multiplier (e.g., `4` = 400ms, `2` = 200ms).
-- `curve`: name of a defined bezier curve, or `default`.
+| Field | Description |
+|-------|-------------|
+| `<name>` | Output name (HDMI-A-1, DP-1, eDP-1, etc.) |
+| `<mode>` | `preferable`, `disable`, or `WIDTHxHEIGHT@REFRESH` |
+| `<position>` | X and Y coordinates as `XxY` |
+
+Examples:
+
+```ini
+# Use preferred mode, position at origin
+general.output = HDMI-A-1,preferable,0x0
+
+# Custom resolution and refresh, position right of first monitor
+general.output = DP-1,2560x1440@144,1920x0
+
+# Disable internal laptop display
+general.output = eDP-1,disable
+
+# Use preferred mode, position below first monitor
+general.output = DP-2,preferable,0x1440
+```
+
+Use `wlr-randr` to get output names and available modes.
+
+### Animation curves
+
+Define custom cubic bezier easing curves.
+
+Format: `bezier = <name>, <p1x>, <p1y>, <p2x>, <p2y>`
+
+Control points p1 and p2 define curve shape. Values typically 0.0 to 1.0 but can exceed for overshoot effects.
 
 Example:
 
-    animation = windows, 1, 4, easeOutBack
-    animation = fade, 1, 3, easeOutQuint
+```ini
+bezier = easeOutBack, 0.34, 1.56, 0.64, 1.0
+bezier = easeOutQuint, 0.22, 1.0, 0.36, 1.0
+bezier = mySmoothCurve, 0.0, 0.0, 0.2, 1.0
+```
 
-### General keys
+### Animation rules
 
-| Key | Value |
-|---|---|
-| border_width | integer, pixels |
-| border_color_focused | 0xRRGGBBAA |
-| border_color_unfocused | 0xRRGGBBAA |
-| background_color | 0xRRGGBBAA |
-| gaps_in | integer |
-| gaps_out | integer |
-| corner_radius | number |
-| active_opacity | 0.0 to 1.0 |
-| inactive_opacity | 0.0 to 1.0 |
-| wallpaper | path, ~ is expanded |
-| wallpaper_mode | fill, fit, stretch, center |
-| kb_layouts | xkb layout list, example: us,ru |
-| kb_options | xkb options, example: grp:alt_shift_toggle |
+Apply curves to animation types.
 
-### Bind syntax
+Format: `animation = <type>, <enabled>, <duration_multiplier>, <curve>`
 
-    bind.<modifiers>.<key> = <action>
+| Field | Description |
+|-------|-------------|
+| `<type>` | `windows` (geometry/movement) or `fade` (opacity/borders) |
+| `<enabled>` | `1` to enable, `0` to disable |
+| `<duration_multiplier>` | Duration in 100ms units (1=100ms, 2=200ms, 4=400ms) |
+| `<curve>` | Name of defined bezier curve or `default` |
 
-Modifiers: super, shift, ctrl, alt. Keys: letters, digits, F1 to F12, arrows, ESC, ENTER, TAB, SPACE, PRINT.
+Example:
 
-Actions:
+```ini
+animation = windows, 1, 4, easeOutBack
+animation = fade, 1, 3, easeOutQuint
+```
 
-| Action | Effect |
-|---|---|
-| exec <command> | run a command |
-| close | close the focused window |
-| quit | stop the compositor |
-| togglefloating | switch between tiled and floating |
-| fullscreen | toggle fullscreen |
-| center | center a floating window |
-| focus left/down/up/right | focus a window in a direction |
-| move left/down/up/right | move a window in a direction |
-| moveoutput left/down/up/right | move a window to another output |
-| resize left/down/up/right | resize the focused window |
-| workspace N | activate workspace N, key 0 means 10 |
-| vt N | switch virtual terminal |
+### Blur rules
 
-### exec-once
+Apply blur effect to specific windows.
 
-    exec-once = <command>
+Format: `blur = <pattern>, <radius>, <strength>`
 
-The command runs one time at startup.
+| Field | Description |
+|-------|-------------|
+| `<pattern>` | Match pattern with prefix |
+| `<radius>` | Blur radius in pixels |
+| `<strength>` | Blur intensity (0.0 to 1.0) |
+
+Pattern prefixes:
+
+- `app_id:<name>` - match XDG app_id
+- `class:<name>` - match X11 class
+- `instance:<name>` - match X11 instance
+- `title:<name>` - match window title
+- `namespace:<name>` - match layer shell namespace
+
+Example:
+
+```ini
+blur = app_id:kitty, 6, 1.0
+blur = class:firefox, 8, 0.8
+blur = namespace:waybar, 4, 0.6
+```
+
+### Keybinds
+
+Format: `bind.<modifiers>.<key> = <action>`
+
+#### Modifiers
+
+- `super` - Super/Logo/Windows key (MOD4)
+- `shift` - Shift
+- `ctrl` or `control` - Control
+- `alt` - Alt
+
+Combine multiple modifiers with dots: `bind.super.shift.c`
+
+#### Keys
+
+- Letters: `a` to `z`
+- Digits: `0` to `9`
+- Function keys: `F1` to `F12`
+- Arrows: `left`, `right`, `up`, `down`
+- Special: `ESC`, `ENTER`, `TAB`, `SPACE`, `BACKSPACE`, `DELETE`, `HOME`, `END`, `PAGEUP`, `PAGEDOWN`, `PRINT`
+
+#### Actions
+
+| Action | Description |
+|--------|-------------|
+| `exec <command>` | Run shell command |
+| `close` | Close focused window |
+| `quit` | Stop compositor |
+| `togglefloating` | Switch between tiled and floating |
+| `fullscreen` | Toggle fullscreen |
+| `center` | Center floating window on output |
+| `focus <direction>` | Focus window in direction (left/down/up/right) |
+| `move <direction>` | Move window in direction |
+| `moveoutput <direction>` | Move window to adjacent output |
+| `resize <direction>` | Resize tiled window or floating window |
+| `workspace N` | Activate workspace 1-10 (0 means 10) |
+| `vt N` | Switch to virtual terminal N |
+
+Example:
+
+```ini
+bind.super.q = exec kitty
+bind.super.e = exec nautilus
+bind.super.c = close
+bind.super.v = togglefloating
+bind.super.f = fullscreen
+bind.super.shift.c = center
+bind.super.esc = quit
+bind.super.left = focus left
+bind.super.right = focus right
+bind.super.up = focus up
+bind.super.down = focus down
+bind.super.shift.left = move left
+bind.super.shift.right = move right
+bind.super.ctrl.h = resize left
+bind.super.ctrl.l = resize right
+bind.super.1 = workspace 1
+bind.super.2 = workspace 2
+bind.super.0 = workspace 10
+bind.ctrl.alt.F1 = vt 1
+bind.ctrl.alt.F2 = vt 2
+```
+
+### Startup commands
+
+Run commands once at compositor startup.
+
+Format: `exec-once = <command>`
+
+Example:
+
+```ini
+exec-once = waybar
+exec-once = mako
+exec-once = fcitx5
+```
 
 ## Workspace rules
 
-- Each output shows one workspace.
-- A visible workspace belongs to its output.
-- A hidden workspace remembers its last output.
-- Activate a workspace that is visible on another output: focus and cursor move to that output. Both outputs keep their workspaces.
-- Activate a hidden workspace with a last output: the workspace opens on its last output. Focus and cursor move there.
-- Activate a hidden workspace without a last output: it opens on the output that received the request.
+- Each output shows one workspace
+- Visible workspace belongs to its output
+- Hidden workspace remembers last output
+- Activate visible workspace on another output: focus and cursor move there, both outputs keep their workspaces
+- Activate hidden workspace with last output: workspace opens on last output, focus and cursor move there
+- Activate hidden workspace without last output: workspace opens on requesting output
 
 ## IPC
 
-Socket path: $XDG_RUNTIME_DIR/wyowm.sock, fallback /tmp/wyowm.sock.
+Socket: `$XDG_RUNTIME_DIR/wyowm.sock` or `/tmp/wyowm.sock`
 
 Commands:
 
-    workspaces      print workspace state as JSON
-    ws N            activate workspace N
+- `workspaces` - print workspace state as JSON
+- `ws N` - activate workspace N
 
-Use the wyoctl tool:
+Use wyoctl tool:
 
-    wyoctl workspaces
-    wyoctl ws 3
+```bash
+wyoctl workspaces
+wyoctl ws 3
+```
 
 ## Screen sharing
 
-The compositor exposes wlr-screencopy. For OBS and Discord, install xdg-desktop-portal and xdg-desktop-portal-wlr. The compositor starts both portals at startup when the binaries exist.
+Compositor exposes wlr-screencopy protocol. Install `xdg-desktop-portal` and `xdg-desktop-portal-wlr` for OBS and Discord. Compositor starts both portals at startup when binaries exist.
 
 ## Logs
 
-- /tmp/wyowm.log: compositor log.
-- /tmp/wyowm-spawn.log: stdout and stderr of spawned commands.
+- `/tmp/wyowm.log` - compositor log
+- `/tmp/wyowm-spawn.log` - stdout and stderr of spawned commands
+
+## Output management
+
+Use `wlr-randr` to query and configure outputs at runtime:
+
+```bash
+wlr-randr
+wlr-randr --output DP-1 --mode 2560x1440@144 --pos 1920,0
+```
+
+Output configuration from config file applies at startup. Runtime changes via wlr-randr override config but do not persist.

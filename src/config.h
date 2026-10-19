@@ -11,6 +11,18 @@
 #define MAX_BEZIERS 32
 #define MAX_ANIM_RULES 16
 #define MAX_BLUR_RULES 32
+#define MAX_OUTPUT_RULES 16
+
+typedef struct ConfigOutputRule {
+    char name[64];
+    bool enabled;
+    bool use_preferred;
+    int mode_width;
+    int mode_height;
+    int mode_refresh;
+    int x;
+    int y;
+} ConfigOutputRule;
 
 typedef enum {
     BLUR_MATCH_APP_ID,
@@ -28,15 +40,15 @@ typedef struct {
 } ConfigBlurRule;
 
 typedef struct {
-	char name[64];
-	BezierCurve curve;
+    char name[64];
+    BezierCurve curve;
 } ConfigBezierEntry;
 
 typedef struct {
-	char type[64];
-	bool enabled;
-	int duration_ms;
-	char curve_name[64];
+    char type[64];
+    bool enabled;
+    int duration_ms;
+    char curve_name[64];
 } ConfigAnimRule;
 
 typedef enum {
@@ -74,26 +86,26 @@ typedef enum {
 } WallpaperMode;
 
 typedef struct ConfigExecOnce {
-	char *command;
-	struct wl_list link;
+    char *command;
+    struct wl_list link;
 } ConfigExecOnce;
 
 typedef struct Config {
-	int border_width;
-	float border_color_focused[4];
-	float border_color_unfocused[4];
-	float background_color[4];
-	int gaps_in;
-	int gaps_out;
-	double corner_radius;
-	double active_opacity;
-	double inactive_opacity;
-	int animation_duration_ms;
-	int anim_window_duration_ms;
-	int anim_window_curve;
-	int anim_opacity_duration_ms;
-	int anim_opacity_curve;
-	char wallpaper_path[1024];
+    int border_width;
+    float border_color_focused[4];
+    float border_color_unfocused[4];
+    float background_color[4];
+    int gaps_in;
+    int gaps_out;
+    double corner_radius;
+    double active_opacity;
+    double inactive_opacity;
+    int animation_duration_ms;
+    int anim_window_duration_ms;
+    int anim_window_curve;
+    int anim_opacity_duration_ms;
+    int anim_opacity_curve;
+    char wallpaper_path[1024];
     WallpaperMode wallpaper_mode;
     char kb_rules[64];
     char kb_model[64];
@@ -106,12 +118,14 @@ typedef struct Config {
     ConfigBlurRule blur_rules[MAX_BLUR_RULES];
     int blur_rule_count;
     struct wl_list keybinds;
-	struct wl_list exec_once;
-	bool has_keybinds;
-	ConfigBezierEntry beziers[MAX_BEZIERS];
-	int bezier_count;
-	ConfigAnimRule anim_rules[MAX_ANIM_RULES];
-	int anim_rule_count;
+    struct wl_list exec_once;
+    bool has_keybinds;
+    ConfigBezierEntry beziers[MAX_BEZIERS];
+    int bezier_count;
+    ConfigAnimRule anim_rules[MAX_ANIM_RULES];
+    int anim_rule_count;
+    ConfigOutputRule output_rules[MAX_OUTPUT_RULES];
+    int output_rule_count;
 } Config;
 
 void config_init_defaults(Config *config);
@@ -121,5 +135,5 @@ void config_free_keybinds(Config *config);
 void config_destroy(Config *config);
 bool config_default_path(char *out, size_t out_size);
 void config_load_workspace_keybinds(Config *config);
-
+bool config_generate_default(const char *path);
 #endif

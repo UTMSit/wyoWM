@@ -27,6 +27,7 @@
 #include <wlr/types/wlr_idle_inhibit_v1.h>
 #include <wlr/types/wlr_gamma_control_v1.h>
 #include <wlr/types/wlr_buffer.h>
+#include <wlr/types/wlr_output_management_v1.h>
 #include <wlr/render/drm_format_set.h>
 #include <drm_fourcc.h>
 #include <wlr/types/wlr_tearing_control_v1.h>
@@ -46,6 +47,164 @@ static inline void listener_remove(struct wl_listener *listener) {
     }
 }
 
+static void handle_output_manager_destroy(struct wl_listener *listener, void *data) {
+    Server *server = wl_container_of(listener, server, output_manager_destroy);
+    (void)data;
+    listener_remove(&server->output_manager_apply);
+    listener_remove(&server->output_manager_test);
+    listener_remove(&server->output_manager_destroy);
+    server->output_manager = NULL;
+}
+
+static bool server_apply_output_config(Server *server, struct wlr_output_configuration_v1 *config) {
+    size_t states_len = 0;
+    struct wlr_backend_output_state *states =
+        wlr_output_configuration_v1_build_state(config, &states_len);
+    if (!states) {
+        return false;
+    }
+
+    bool ok = wlr_backend_test(server->backend, states, states_len);
+    if (ok) {
+        ok = wlr_backend_commit(server->backend, states, states_len);
+    }
+
+    if (ok) {
+        struct wlr_output_configuration_head_v1 *head;
+        wl_list_for_each(head, &config->heads, link) {
+            struct wlr_output *wlr_output = head->state.output;
+            if (!head->state.enabled) {
+                wlr_output_layout_remove(server->output_layout, wlr_output);
+            } else {
+                wlr_output_layout_add(
+                    server->output_layout, wlr_output,
+                    head->state.x, head->state.y);
+            }
+        }
+    }
+
+    free(states);
+    return ok;
+}
+
+static void handle_output_manager_apply(struct wl_listener *listener, void *data) {
+    Server *server = wl_container_of(listener, server, output_manager_apply);
+    struct wlr_output_configuration_v1 *config = data;
+
+    bool ok = server_apply_output_config(server, config);
+
+    if (ok) {
+        wlr_output_configuration_v1_send_succeeded(config);
+    } else {
+        wlr_output_configuration_v1_send_failed(config);
+    }
+
+    wlr_output_configuration_v1_destroy(config);
+
+    server_arrange(server);
+    server_update_output_manager_config(server);
+}
+
+static void handle_output_manager_test(struct wl_listener *listener, void *data) {
+    Server *server = wl_container_of(listener, server, output_manager_test);
+    struct wlr_output_configuration_v1 *config = data;
+
+    size_t states_len = 0;
+    struct wlr_backend_output_state *states =
+        wlr_output_configuration_v1_build_state(config, &states_len);
+    if (!states) {
+        wlr_output_configuration_v1_send_failed(config);
+        wlr_output_configuration_v1_destroy(config);
+        return;
+    }
+
+    bool ok = wlr_backend_test(server->backend, states, states_len);
+    free(states);
+
+    if (ok) {
+        wlr_output_configuration_v1_send_succeeded(config);
+    } else {
+        wlr_output_configuration_v1_send_failed(config);
+    }
+
+    wlr_output_configuration_v1_destroy(config);
+}
+
+void server_update_output_manager_config(Server *server) {
+    if (!server || !server->output_manager || server->shutting_down) return;
+
+    struct wlr_output_configuration_v1 *config = wlr_output_configuration_v1_create();
+    if (!config) return;
+
+    Output *output;
+    wl_list_for_each(output, &server->outputs, link) {
+        struct wlr_output *wlr_output = output->wlr_output;
+        struct wlr_output_configuration_head_v1 *head =
+            wlr_output_configuration_head_v1_create(config, wlr_output);
+        if (!head) continue;
+
+        struct wlr_box box = {0};
+        wlr_output_layout_get_box(server->output_layout, wlr_output, &box);
+        head->state.x = box.x;
+        head->state.y = box.y;
+        head->state.enabled = wlr_output->enabled;
+        head->state.mode = wlr_output->current_mode;
+        head->state.scale = wlr_output->scale;
+        head->state.transform = wlr_output->transform;
+    }
+
+    wlr_output_manager_v1_set_configuration(server->output_manager, config);
+}
+
+void server_apply_output_rules(Server *server) {
+    if (!server || server->shutting_down) return;
+
+    for (int i = 0; i < server->config.output_rule_count; i++) {
+        const ConfigOutputRule *rule = &server->config.output_rules[i];
+        Output *output = output_find_by_name(server, rule->name);
+        if (!output || !output->wlr_output) continue;
+
+        struct wlr_output_state state;
+        wlr_output_state_init(&state);
+
+        if (!rule->enabled) {
+            wlr_output_state_set_enabled(&state, false);
+            wlr_output_commit_state(output->wlr_output, &state);
+            wlr_output_state_finish(&state);
+            wlr_output_layout_remove(server->output_layout, output->wlr_output);
+            continue;
+        }
+
+        wlr_output_state_set_enabled(&state, true);
+
+        if (!rule->use_preferred) {
+            struct wlr_output_mode *mode;
+            wl_list_for_each(mode, &output->wlr_output->modes, link) {
+                if (mode->width == rule->mode_width &&
+                    mode->height == rule->mode_height) {
+                    if (rule->mode_refresh == 0 ||
+                        mode->refresh == rule->mode_refresh) {
+                        wlr_output_state_set_mode(&state, mode);
+                        break;
+                    }
+                }
+            }
+        }
+
+        bool ok = wlr_output_commit_state(output->wlr_output, &state);
+        wlr_output_state_finish(&state);
+
+        if (ok) {
+            wlr_output_layout_add(
+                server->output_layout, output->wlr_output,
+                rule->x, rule->y);
+        }
+    }
+
+    server_arrange(server);
+    server_update_output_manager_config(server);
+}
+
 static void reload_config(Server *server) {
     if (!server || server->shutting_down) return;
 
@@ -60,16 +219,13 @@ static void reload_config(Server *server) {
     if (!new_config.has_keybinds) {
         config_load_default_keybinds(&new_config);
     }
-
     config_load_workspace_keybinds(&new_config);
 
     config_destroy(&server->config);
-
     server->config = new_config;
 
     wl_list_init(&server->config.keybinds);
     wl_list_init(&server->config.exec_once);
-
     wl_list_insert_list(&server->config.keybinds, &new_config.keybinds);
     wl_list_insert_list(&server->config.exec_once, &new_config.exec_once);
 
@@ -132,8 +288,12 @@ static void reload_config(Server *server) {
     wl_list_for_each(view, &server->views, link) {
         view_refresh_decorations(view);
     }
+
     input_reload_keymaps(server);
     input_reload_cursor(server);
+
+    server_apply_output_rules(server);
+
     server_arrange(server);
 }
 
@@ -143,11 +303,9 @@ void server_reload_config(Server *server) {
 
 static int handle_reload_fd(int fd, uint32_t mask, void *data) {
     Server *server = data;
-
     if (mask & WL_EVENT_READABLE) {
         struct signalfd_siginfo si;
         bool got = false;
-
         for (;;) {
             ssize_t n = read(fd, &si, sizeof(si));
             if (n != (ssize_t)sizeof(si)) {
@@ -155,12 +313,10 @@ static int handle_reload_fd(int fd, uint32_t mask, void *data) {
             }
             got = true;
         }
-
         if (got) {
             reload_config(server);
         }
     }
-
     return 0;
 }
 
@@ -183,23 +339,23 @@ static void handle_decoration_request_mode(struct wl_listener *listener, void *d
 }
 
 static void handle_xdg_activation_request_activate(struct wl_listener *listener, void *data) {
-	Server *server = wl_container_of(listener, server, xdg_activation_request_activate);
-	struct wlr_xdg_activation_v1_request_activate_event *event = data;
-	if (!event || !event->surface || server->shutting_down) return;
-	struct wlr_surface *root = wlr_surface_get_root_surface(event->surface);
-	if (!root) return;
-	View *view;
-	wl_list_for_each(view, &server->views, link) {
-		if (view->type == VIEW_TYPE_XDG &&
-		    view->mapped &&
-		    view->xdg.xdg_surface &&
-		    view->xdg.xdg_surface->surface == root) {
-						View *fs = view->output ? output_fullscreen_view(view->output) : NULL;
-						if (fs && fs != view) return;
-						server_focus_view(server, view);
-						return;
-		}
-	}
+    Server *server = wl_container_of(listener, server, xdg_activation_request_activate);
+    struct wlr_xdg_activation_v1_request_activate_event *event = data;
+    if (!event || !event->surface || server->shutting_down) return;
+    struct wlr_surface *root = wlr_surface_get_root_surface(event->surface);
+    if (!root) return;
+    View *view;
+    wl_list_for_each(view, &server->views, link) {
+        if (view->type == VIEW_TYPE_XDG &&
+            view->mapped &&
+            view->xdg.xdg_surface &&
+            view->xdg.xdg_surface->surface == root) {
+            View *fs = view->output ? output_fullscreen_view(view->output) : NULL;
+            if (fs && fs != view) return;
+            server_focus_view(server, view);
+            return;
+        }
+    }
 }
 
 static void handle_request_set_selection(struct wl_listener *listener, void *data) {
@@ -211,28 +367,22 @@ static void handle_request_set_selection(struct wl_listener *listener, void *dat
 static void handle_new_xdg_decoration(struct wl_listener *listener, void *data) {
     (void)listener;
     struct wlr_xdg_toplevel_decoration_v1 *decoration = data;
-
     if (!decoration->toplevel || !decoration->toplevel->base) {
         return;
     }
-
     struct wlr_xdg_surface *xdg_surface = decoration->toplevel->base;
     View *view = xdg_surface->data;
-
     if (!view) {
         if (xdg_surface->initialized) {
             wlr_xdg_toplevel_decoration_v1_set_mode(decoration, WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
         }
         return;
     }
-
     listener_remove(&view->decoration_destroy);
-
     view->decoration = decoration;
     view->decoration_mode_set = false;
     view->decoration_destroy.notify = handle_decoration_destroy;
     wl_signal_add(&decoration->events.destroy, &view->decoration_destroy);
-
     if (xdg_surface->initialized) {
         wlr_xdg_toplevel_decoration_v1_set_mode(decoration, WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
         view->decoration_mode_set = true;
@@ -270,22 +420,22 @@ static struct wlr_buffer *xcursor_image_to_buffer(Server *server, struct wlr_xcu
 }
 
 static void handle_xwayland_ready(struct wl_listener *listener, void *data) {
-	Server *server = wl_container_of(listener, server, xwayland_ready);
-	(void)data;
-	if (!server->xwayland) return;
-	setenv("DISPLAY", server->xwayland->display_name, 1);
-	wlr_xwayland_set_seat(server->xwayland, server->seat);
-	if (server->xcursor_manager) {
-		struct wlr_xcursor *xcursor = wlr_xcursor_manager_get_xcursor(server->xcursor_manager, "left_ptr", 1);
-		if (xcursor && xcursor->image_count > 0) {
-			struct wlr_xcursor_image *image = xcursor->images[0];
-			struct wlr_buffer *buf = xcursor_image_to_buffer(server, image);
-			if (buf) {
-				wlr_xwayland_set_cursor(server->xwayland, buf, image->hotspot_x, image->hotspot_y);
-				wlr_buffer_drop(buf);
-			}
-		}
-	}
+    Server *server = wl_container_of(listener, server, xwayland_ready);
+    (void)data;
+    if (!server->xwayland) return;
+    setenv("DISPLAY", server->xwayland->display_name, 1);
+    wlr_xwayland_set_seat(server->xwayland, server->seat);
+    if (server->xcursor_manager) {
+        struct wlr_xcursor *xcursor = wlr_xcursor_manager_get_xcursor(server->xcursor_manager, "left_ptr", 1);
+        if (xcursor && xcursor->image_count > 0) {
+            struct wlr_xcursor_image *image = xcursor->images[0];
+            struct wlr_buffer *buf = xcursor_image_to_buffer(server, image);
+            if (buf) {
+                wlr_xwayland_set_cursor(server->xwayland, buf, image->hotspot_x, image->hotspot_y);
+                wlr_buffer_drop(buf);
+            }
+        }
+    }
 }
 
 static void handle_xwayland_new_surface(struct wl_listener *listener, void *data) {
@@ -302,49 +452,42 @@ static void handle_xwayland_destroy(struct wl_listener *listener, void *data) {
 #endif
 
 static const char *cursor_shape_fallback(const char *name) {
-	if (!name || !*name) return "left_ptr";
-
-	if (strcmp(name, "crosshair") == 0) return "crosshair";
-	if (strcmp(name, "sb_v_double_arrow") == 0) return "ns-resize";
-	if (strcmp(name, "sb_h_double_arrow") == 0) return "ew-resize";
-	if (strcmp(name, "fleur") == 0) return "move";
-	if (strcmp(name, "hand1") == 0 || strcmp(name, "hand2") == 0) return "pointer";
-	if (strcmp(name, "xterm") == 0 || strcmp(name, "ibeam") == 0) return "text";
-	if (strcmp(name, "watch") == 0 || strcmp(name, "wait") == 0) return "wait";
-	if (strcmp(name, "pirate") == 0) return "not-allowed";
-
-	return name;
+    if (!name || !*name) return "left_ptr";
+    if (strcmp(name, "crosshair") == 0) return "crosshair";
+    if (strcmp(name, "sb_v_double_arrow") == 0) return "ns-resize";
+    if (strcmp(name, "sb_h_double_arrow") == 0) return "ew-resize";
+    if (strcmp(name, "fleur") == 0) return "move";
+    if (strcmp(name, "hand1") == 0 || strcmp(name, "hand2") == 0) return "pointer";
+    if (strcmp(name, "xterm") == 0 || strcmp(name, "ibeam") == 0) return "text";
+    if (strcmp(name, "watch") == 0 || strcmp(name, "wait") == 0) return "wait";
+    if (strcmp(name, "pirate") == 0) return "not-allowed";
+    return name;
 }
 
 static void handle_request_set_cursor_shape(struct wl_listener *listener, void *data) {
-	Server *server = wl_container_of(listener, server, request_set_cursor_shape);
-	struct wlr_cursor_shape_manager_v1_request_set_shape_event *event = data;
-
-	if (!server || !server->seat || !server->cursor || !event) {
-		return;
-	}
-
-	if (server->drag.active || server->dnd_active) {
-		return;
-	}
-
-	if (event->seat_client != server->seat->pointer_state.focused_client) {
-		return;
-	}
-
-	if (server->xcursor_manager) {
-		const char *name = wlr_cursor_shape_v1_name(event->shape);
-		const char *fallback_name = cursor_shape_fallback(name);
-		if (fallback_name && fallback_name[0]) {
-			wlr_cursor_set_xcursor(server->cursor, server->xcursor_manager, fallback_name);
-		}
-	}
+    Server *server = wl_container_of(listener, server, request_set_cursor_shape);
+    struct wlr_cursor_shape_manager_v1_request_set_shape_event *event = data;
+    if (!server || !server->seat || !server->cursor || !event) {
+        return;
+    }
+    if (server->drag.active || server->dnd_active) {
+        return;
+    }
+    if (event->seat_client != server->seat->pointer_state.focused_client) {
+        return;
+    }
+    if (server->xcursor_manager) {
+        const char *name = wlr_cursor_shape_v1_name(event->shape);
+        const char *fallback_name = cursor_shape_fallback(name);
+        if (fallback_name && fallback_name[0]) {
+            wlr_cursor_set_xcursor(server->cursor, server->xcursor_manager, fallback_name);
+        }
+    }
 }
 
 static void handle_new_output(struct wl_listener *listener, void *data) {
     Server *server = wl_container_of(listener, server, new_output);
     struct wlr_output *wlr_output = data;
-
     output_create(server, wlr_output);
 }
 
@@ -352,7 +495,6 @@ static void handle_new_toplevel(struct wl_listener *listener, void *data) {
     Server *server = wl_container_of(listener, server, new_toplevel);
     struct wlr_xdg_toplevel *toplevel = data;
     struct wlr_xdg_surface *xdg_surface = toplevel->base;
-
     view_create_xdg(server, xdg_surface, toplevel);
 }
 
@@ -395,43 +537,39 @@ void server_view_mapped(Server *server, View *view) {
             if (server->active_output) {
                 view->output = server->active_output;
             }
-
             if (!view->output && server->cursor) {
                 view->output = output_at(server, server->cursor->x, server->cursor->y);
             }
-
             if (!view->output && !wl_list_empty(&server->outputs)) {
                 Output *first = wl_container_of(server->outputs.next, first, link);
                 view->output = first;
             }
         }
-
         if (view->output && view->output->active_workspace) {
             view->workspace = view->output->active_workspace;
         }
     }
-
     if (view->workspace && view->workspace->output) {
         view->output = view->workspace->output;
     }
 
     if (!view->workspace || !view->output) return;
 
-   	if (!view->tiled && !view->floating && !view->fullscreen && !view->dragging) {
+    if (!view->tiled && !view->floating && !view->fullscreen && !view->dragging) {
         bool transient = false;
         if (view->type == VIEW_TYPE_XDG &&
             view->xdg.toplevel &&
             view->xdg.toplevel->parent != NULL) {
             transient = true;
         }
-    #if defined(WYO_HAS_XWAYLAND)
+#if defined(WYO_HAS_XWAYLAND)
         if (view->type == VIEW_TYPE_XWAYLAND && view->xwayland.xsurface) {
             if (view->xwayland.xsurface->parent != NULL ||
                 view->xwayland.xsurface->override_redirect) {
                 transient = true;
             }
         }
-    #endif
+#endif
         if (transient) {
             view->floating = true;
             Output *out = view->output;
@@ -461,46 +599,44 @@ void server_view_mapped(Server *server, View *view) {
         view->height > 0) {
         wlr_xdg_toplevel_set_size(view->xdg.toplevel, view->width, view->height);
     }
+
     ipc_notify_workspaces(server);
     ext_workspace_sync(server);
 }
 
 static void server_release_workspace_if_empty(Server *server, Workspace *ws) {
-	if (!server || server->shutting_down || !ws || !ws->output) return;
-	if (!workspace_empty(server, ws)) return;
+    if (!server || server->shutting_down || !ws || !ws->output) return;
+    if (!workspace_empty(server, ws)) return;
 
-	Output *out = ws->output;
-	bool was_active = (out->active_workspace == ws);
+    Output *out = ws->output;
+    bool was_active = (out->active_workspace == ws);
 
-	workspace_hide(ws);
-	ws->last_output = NULL;
+    workspace_hide(ws);
+    ws->last_output = NULL;
 
-	if (!was_active) return;
+    if (!was_active) return;
 
-	Workspace *replacement = NULL;
-	Workspace *w;
+    Workspace *replacement = NULL;
+    Workspace *w;
+    wl_list_for_each(w, &server->workspaces, link) {
+        if (w != ws && !w->output && workspace_empty(server, w)) {
+            replacement = w;
+            break;
+        }
+    }
+    if (!replacement) {
+        wl_list_for_each(w, &server->workspaces, link) {
+            if (w != ws && !w->output) {
+                replacement = w;
+                break;
+            }
+        }
+    }
 
-	wl_list_for_each(w, &server->workspaces, link) {
-		if (w != ws && !w->output && workspace_empty(server, w)) {
-			replacement = w;
-			break;
-		}
-	}
-
-	if (!replacement) {
-		wl_list_for_each(w, &server->workspaces, link) {
-			if (w != ws && !w->output) {
-				replacement = w;
-				break;
-			}
-		}
-	}
-
-	out->active_workspace = replacement;
-
-	if (replacement) {
-		workspace_show(replacement, out);
-	}
+    out->active_workspace = replacement;
+    if (replacement) {
+        workspace_show(replacement, out);
+    }
 }
 
 void server_view_unmapped(Server *server, View *view) {
@@ -516,27 +652,23 @@ void server_view_unmapped(Server *server, View *view) {
     if (view->workspace) {
         workspace_remove_view(view->workspace, view);
     }
-
     view->output = NULL;
     view->tiled = false;
 
     if (server->focused_view == view) {
         View *next = NULL;
-
         if (view->workspace && view->workspace->output) {
             next = workspace_focused_view(view->workspace);
             if (!next) {
                 next = workspace_first_view(view->workspace);
             }
         }
-
         if (!next && server->active_output && server->active_output->active_workspace) {
             next = workspace_focused_view(server->active_output->active_workspace);
             if (!next) {
                 next = workspace_first_view(server->active_output->active_workspace);
             }
         }
-
         server_focus_view(server, next);
     }
 
@@ -560,31 +692,26 @@ void server_view_destroyed(Server *server, View *view) {
         workspace_remove_view(ws, view);
         view->workspace = NULL;
     }
-
     view->output = NULL;
     view->tiled = false;
 
     if (server->focused_view == view) {
         View *next = NULL;
-
         if (ws) {
             next = workspace_focused_view(ws);
             if (!next) {
                 next = workspace_first_view(ws);
             }
         }
-
         if (ws) {
             server_release_workspace_if_empty(server, ws);
         }
-
         if (!next && server->active_output && server->active_output->active_workspace) {
             next = workspace_focused_view(server->active_output->active_workspace);
             if (!next) {
                 next = workspace_first_view(server->active_output->active_workspace);
             }
         }
-
         server_focus_view(server, next);
     } else {
         if (ws) {
@@ -598,73 +725,77 @@ void server_view_destroyed(Server *server, View *view) {
 }
 
 static void server_raise_floating(Server *server) {
-	if (!server || server->shutting_down) return;
-
-	View *focused = server->focused_view;
-	View *view;
-
-	wl_list_for_each_reverse(view, &server->views, link) {
-		if (view == focused) continue;
-		if (!view->mapped || !view->floating || view->fullscreen || !view->output || !view->root_tree) {
-			continue;
-		}
-		wlr_scene_node_raise_to_top(&view->root_tree->node);
-	}
-
-	if (focused && focused->mapped && focused->floating &&
-	    !focused->fullscreen && focused->output && focused->root_tree) {
-		wlr_scene_node_raise_to_top(&focused->root_tree->node);
-	}
+    if (!server || server->shutting_down) return;
+    View *focused = server->focused_view;
+    View *view;
+    wl_list_for_each_reverse(view, &server->views, link) {
+        if (view == focused) continue;
+        if (!view->mapped || !view->floating || view->fullscreen || !view->output || !view->root_tree) {
+            continue;
+        }
+        wlr_scene_node_raise_to_top(&view->root_tree->node);
+    }
+    if (focused && focused->mapped && focused->floating &&
+        !focused->fullscreen && focused->output && focused->root_tree) {
+        wlr_scene_node_raise_to_top(&focused->root_tree->node);
+    }
 }
 
 View *output_fullscreen_view(Output *output) {
-	if (!output || !output->server) return NULL;
-
-	View *view;
-	wl_list_for_each(view, &output->server->views, link) {
-		if (view->output == output &&
-			view->mapped &&
-			view->fullscreen &&
-			view->root_tree &&
-			view->root_tree->node.enabled) {
-			return view;
-		}
-	}
-
-	return NULL;
+    if (!output || !output->server) return NULL;
+    View *view;
+    wl_list_for_each(view, &output->server->views, link) {
+        if (view->output == output &&
+            view->mapped &&
+            view->fullscreen &&
+            view->root_tree &&
+            view->root_tree->node.enabled) {
+            return view;
+        }
+    }
+    return NULL;
 }
 
 void server_focus_view(Server *server, View *view) {
     if (!server || server->shutting_down) return;
+
     if (view && (!view->mapped || !view->output)) {
         view = NULL;
     }
+
     if (view && view->output) {
         View *fs = output_fullscreen_view(view->output);
         if (fs && fs != view) {
             view = fs;
         }
     }
+
     if (view && view->output) {
         server->active_output = view->output;
     }
+
     if (server->focused_view == view && !server->focused_surface) {
-		if (view && view->workspace) {
-			dwindle_focus(&view->workspace->layout, view);
-		}
-		return;
-	}
+        if (view && view->workspace) {
+            dwindle_focus(&view->workspace->layout, view);
+        }
+        return;
+    }
+
     listener_remove(&server->focused_surface_destroy);
     server->focused_surface = NULL;
+
     if (server->focused_view) {
         view_unfocus(server->focused_view);
     }
+
     server->focused_view = view;
+
     if (view) {
         view_focus(view);
-       	if (view->workspace) {
-		dwindle_focus(&view->workspace->layout, view);
-	}
+        if (view->workspace) {
+            dwindle_focus(&view->workspace->layout, view);
+        }
+
         if (server->seat &&
             server->active_keyboard &&
             view->type == VIEW_TYPE_XDG &&
@@ -678,7 +809,7 @@ void server_focus_view(Server *server, View *view) {
                 server->active_keyboard->num_keycodes,
                 &server->active_keyboard->modifiers
             );
-    #if defined(WYO_HAS_XWAYLAND)
+#if defined(WYO_HAS_XWAYLAND)
         } else if (server->seat &&
                    server->active_keyboard &&
                    view->type == VIEW_TYPE_XWAYLAND &&
@@ -692,13 +823,14 @@ void server_focus_view(Server *server, View *view) {
                 server->active_keyboard->num_keycodes,
                 &server->active_keyboard->modifiers
             );
-    #endif
+#endif
         }
     } else {
         if (server->seat) {
             wlr_seat_keyboard_notify_clear_focus(server->seat);
         }
     }
+
     server_raise_floating(server);
     ipc_notify_workspaces(server);
     ext_workspace_sync(server);
@@ -709,12 +841,14 @@ static void handle_focused_surface_destroy(struct wl_listener *listener, void *d
     (void)data;
     listener_remove(&server->focused_surface_destroy);
     server->focused_surface = NULL;
+
     if (server->shutting_down) return;
+
     View *next = NULL;
     if (server->active_output && server->active_output->active_workspace) {
-		next = dwindle_focused_view(&server->active_output->active_workspace->layout);
-		if (!next) next = dwindle_first_view(&server->active_output->active_workspace->layout);
-	}
+        next = dwindle_focused_view(&server->active_output->active_workspace->layout);
+        if (!next) next = dwindle_first_view(&server->active_output->active_workspace->layout);
+    }
     server->focused_view = NULL;
     server_focus_view(server, next);
 }
@@ -722,12 +856,16 @@ static void handle_focused_surface_destroy(struct wl_listener *listener, void *d
 void server_focus_surface(Server *server, struct wlr_surface *surface) {
     if (!server || server->shutting_down) return;
     if (surface && server->focused_surface == surface) return;
+
     listener_remove(&server->focused_surface_destroy);
+
     if (server->focused_view) {
         view_unfocus(server->focused_view);
         server->focused_view = NULL;
     }
+
     server->focused_surface = surface;
+
     if (surface) {
         server->focused_surface_destroy.notify = handle_focused_surface_destroy;
         wl_signal_add(&surface->events.destroy, &server->focused_surface_destroy);
@@ -736,13 +874,14 @@ void server_focus_surface(Server *server, struct wlr_surface *surface) {
             wlr_seat_keyboard_notify_enter(
                 server->seat,
                 surface,
-    server->active_keyboard->keycodes,
-    server->active_keyboard->num_keycodes,
-    &server->active_keyboard->modifiers
+                server->active_keyboard->keycodes,
+                server->active_keyboard->num_keycodes,
+                &server->active_keyboard->modifiers
             );
             return;
         }
     }
+
     if (server->seat) {
         wlr_seat_keyboard_notify_clear_focus(server->seat);
     }
@@ -750,12 +889,10 @@ void server_focus_surface(Server *server, struct wlr_surface *surface) {
 
 static void update_background(Server *server) {
     if (!server->background) return;
-
     if (server->wallpaper_buffer) {
         wlr_scene_node_set_enabled(&server->background->node, false);
         return;
     }
-
     wlr_scene_node_set_enabled(&server->background->node, true);
     wlr_scene_rect_set_color(server->background, server->config.background_color);
 
@@ -771,11 +908,9 @@ static void update_background(Server *server) {
     bool first = true;
 
     Output *output;
-
     wl_list_for_each(output, &server->outputs, link) {
         int right = output->x + output->width;
         int bottom = output->y + output->height;
-
         if (first) {
             min_x = output->x;
             min_y = output->y;
@@ -801,7 +936,6 @@ void server_arrange(Server *server) {
     update_background(server);
 
     Output *output;
-
     wl_list_for_each(output, &server->outputs, link) {
         output_update_geometry(output);
         wallpaper_configure_output(output);
@@ -815,15 +949,16 @@ void server_arrange(Server *server) {
     }
 
     wl_list_for_each(output, &server->outputs, link) {
-		Workspace *ws = output->active_workspace;
-		if (!ws) continue;
-		dwindle_set_gaps(&ws->layout, server->config.gaps_in, server->config.gaps_out);
-		ws->layout.origin_x = output->usable_x;
-		ws->layout.origin_y = output->usable_y;
-		int width = output->usable_width > 0 ? output->usable_width : output->width;
-		int height = output->usable_height > 0 ? output->usable_height : output->height;
-		dwindle_arrange(&ws->layout, width, height);
-	}
+        Workspace *ws = output->active_workspace;
+        if (!ws) continue;
+        dwindle_set_gaps(&ws->layout, server->config.gaps_in, server->config.gaps_out);
+        ws->layout.origin_x = output->usable_x;
+        ws->layout.origin_y = output->usable_y;
+        int width = output->usable_width > 0 ? output->usable_width : output->width;
+        int height = output->usable_height > 0 ? output->usable_height : output->height;
+        dwindle_arrange(&ws->layout, width, height);
+    }
+
     server_raise_floating(server);
 
     wl_list_for_each(output, &server->outputs, link) {
@@ -906,6 +1041,9 @@ bool server_init(Server *server) {
     wl_list_init(&server->ext_workspace_commit.link);
     wl_list_init(&server->ext_workspace_destroy_listener.link);
     wl_list_init(&server->xdg_activation_request_activate.link);
+    wl_list_init(&server->output_manager_apply.link);
+    wl_list_init(&server->output_manager_test.link);
+    wl_list_init(&server->output_manager_destroy.link);
 #if defined(WYO_HAS_XWAYLAND)
     wl_list_init(&server->xwayland_ready.link);
     wl_list_init(&server->xwayland_new_surface.link);
@@ -916,24 +1054,20 @@ bool server_init(Server *server) {
     if (!server->display) return false;
 
     server->loop = wl_display_get_event_loop(server->display);
-
     server->backend = wlr_backend_autocreate(server->loop, &server->session);
     if (!server->backend) return false;
 
     server->renderer = wlr_renderer_autocreate(server->backend);
     if (!server->renderer) return false;
-
     wlr_renderer_init_wl_display(server->renderer, server->display);
 
     server->allocator = wlr_allocator_autocreate(server->backend, server->renderer);
     if (!server->allocator) return false;
 
     if (!wlr_linux_dmabuf_v1_create_with_renderer(server->display, 4, server->renderer)) {
-        fprintf(stderr, "wyoWM: linux-dmabuf unavailable\n");
     }
 
     wlr_tearing_control_manager_v1_create(server->display, 1);
-
     wlr_primary_selection_v1_device_manager_create(server->display);
     wlr_idle_inhibit_v1_create(server->display);
     wlr_gamma_control_manager_v1_create(server->display);
@@ -947,37 +1081,41 @@ bool server_init(Server *server) {
     server->data_device_manager = wlr_data_device_manager_create(server->display);
     if (!server->data_device_manager) return false;
 
-   	server->xdg_decoration_manager = wlr_xdg_decoration_manager_v1_create(server->display);
-	if (server->xdg_decoration_manager) {
-		server->new_xdg_decoration.notify = handle_new_xdg_decoration;
-		wl_signal_add(&server->xdg_decoration_manager->events.new_toplevel_decoration, &server->new_xdg_decoration);
-	}
+    server->xdg_decoration_manager = wlr_xdg_decoration_manager_v1_create(server->display);
+    if (server->xdg_decoration_manager) {
+        server->new_xdg_decoration.notify = handle_new_xdg_decoration;
+        wl_signal_add(&server->xdg_decoration_manager->events.new_toplevel_decoration, &server->new_xdg_decoration);
+    }
 
-	wlr_viewporter_create(server->display);
-	server->xdg_activation = wlr_xdg_activation_v1_create(server->display);
-	if (server->xdg_activation) {
-		server->xdg_activation_request_activate.notify = handle_xdg_activation_request_activate;
-		wl_signal_add(&server->xdg_activation->events.request_activate,
-		              &server->xdg_activation_request_activate);
-	}
-	server->relative_pointer_manager = wlr_relative_pointer_manager_v1_create(server->display);
+    wlr_viewporter_create(server->display);
+
+    server->xdg_activation = wlr_xdg_activation_v1_create(server->display);
+    if (server->xdg_activation) {
+        server->xdg_activation_request_activate.notify = handle_xdg_activation_request_activate;
+        wl_signal_add(&server->xdg_activation->events.request_activate,
+                      &server->xdg_activation_request_activate);
+    }
+
+    server->relative_pointer_manager = wlr_relative_pointer_manager_v1_create(server->display);
+
     server->pointer_constraints = wlr_pointer_constraints_v1_create(server->display);
     if (server->pointer_constraints) {
         server->new_constraint.notify = handle_new_constraint;
         wl_signal_add(&server->pointer_constraints->events.new_constraint, &server->new_constraint);
     }
+
     wlr_text_input_manager_v3_create(server->display);
     wlr_pointer_gestures_v1_create(server->display);
     wlr_screencopy_manager_v1_create(server->display);
 
-   	server->cursor_shape_manager = wlr_cursor_shape_manager_v1_create(server->display, 1);
-	if (server->cursor_shape_manager) {
-		server->request_set_cursor_shape.notify = handle_request_set_cursor_shape;
-		wl_signal_add(&server->cursor_shape_manager->events.request_set_shape, &server->request_set_cursor_shape);
-	}
+    server->cursor_shape_manager = wlr_cursor_shape_manager_v1_create(server->display, 1);
+    if (server->cursor_shape_manager) {
+        server->request_set_cursor_shape.notify = handle_request_set_cursor_shape;
+        wl_signal_add(&server->cursor_shape_manager->events.request_set_shape, &server->request_set_cursor_shape);
+    }
 
-	typedef void *(*wyo_versioned_global_fn)(struct wl_display *display, uint32_t version);
-	wyo_versioned_global_fn create_frac_scale = (wyo_versioned_global_fn)dlsym(RTLD_DEFAULT, "wlr_fractional_scale_manager_v1_create");
+    typedef void *(*wyo_versioned_global_fn)(struct wl_display *display, uint32_t version);
+    wyo_versioned_global_fn create_frac_scale = (wyo_versioned_global_fn)dlsym(RTLD_DEFAULT, "wlr_fractional_scale_manager_v1_create");
     if (create_frac_scale) create_frac_scale(server->display, 1);
 
     server->output_layout = wlr_output_layout_create(server->display);
@@ -991,7 +1129,6 @@ bool server_init(Server *server) {
 
     server->background = wlr_scene_rect_create(server->scene_tree, 0, 0, server->config.background_color);
     if (!server->background) return false;
-
     wlr_scene_node_lower_to_bottom(&server->background->node);
 
     server->view_tree = wlr_scene_tree_create(server->scene_tree);
@@ -999,6 +1136,7 @@ bool server_init(Server *server) {
     server->floating_tree = wlr_scene_tree_create(server->view_tree);
     server->layer_tree = wlr_scene_tree_create(server->scene_tree);
     server->fullscreen_tree = wlr_scene_tree_create(server->scene_tree);
+
     if (!server->view_tree || !server->tiled_tree || !server->floating_tree ||
         !server->layer_tree || !server->fullscreen_tree) return false;
 
@@ -1022,17 +1160,18 @@ bool server_init(Server *server) {
     server->foreign_toplevel_manager = wlr_foreign_toplevel_manager_v1_create(server->display);
 #endif
 
-    config_init_defaults(&server->config);
-
-    char config_path[1024];
-    if (config_default_path(config_path, sizeof(config_path))) {
-        config_load_file(&server->config, config_path);
+config_init_defaults(&server->config);
+char config_path[1024];
+if (config_default_path(config_path, sizeof(config_path))) {
+    if (access(config_path, F_OK) != 0) {
+        config_generate_default(config_path);
     }
+    config_load_file(&server->config, config_path);
+}
 
     if (!server->config.has_keybinds) {
         config_load_default_keybinds(&server->config);
     }
-
     config_load_workspace_keybinds(&server->config);
 
     wlr_scene_rect_set_color(server->background, server->config.background_color);
@@ -1089,6 +1228,9 @@ bool server_init(Server *server) {
     wl_list_init(&server->xdg_activation_request_activate.link);
     wl_list_init(&server->ext_workspace_commit.link);
     wl_list_init(&server->ext_workspace_destroy_listener.link);
+    wl_list_init(&server->output_manager_apply.link);
+    wl_list_init(&server->output_manager_test.link);
+    wl_list_init(&server->output_manager_destroy.link);
 #if defined(WYO_HAS_XWAYLAND)
     wl_list_init(&server->xwayland_ready.link);
     wl_list_init(&server->xwayland_new_surface.link);
@@ -1125,7 +1267,6 @@ bool server_init(Server *server) {
         handle_reload_fd,
         server
     );
-
     if (!server->reload_source) {
         close(server->reload_fd);
         server->reload_fd = -1;
@@ -1139,23 +1280,32 @@ bool server_init(Server *server) {
     } else {
         snprintf(ipc_path, sizeof(ipc_path), "/tmp/wyowm.sock");
     }
-
     ipc_init(&server->ipc, server, server->loop, ipc_path);
 
-    #if defined(WYO_HAS_XWAYLAND)
+    server->output_manager = wlr_output_manager_v1_create(server->display);
+    if (server->output_manager) {
+        server->output_manager_apply.notify = handle_output_manager_apply;
+        wl_signal_add(&server->output_manager->events.apply, &server->output_manager_apply);
+        server->output_manager_test.notify = handle_output_manager_test;
+        wl_signal_add(&server->output_manager->events.test, &server->output_manager_test);
+        server->output_manager_destroy.notify = handle_output_manager_destroy;
+        wl_signal_add(&server->output_manager->events.destroy, &server->output_manager_destroy);
+    }
+
+#if defined(WYO_HAS_XWAYLAND)
     server->xwayland = wlr_xwayland_create(server->display, server->compositor, false);
-	if (server->xwayland) {
-		if (server->xwayland->display_name) {
-			setenv("DISPLAY", server->xwayland->display_name, 1);
-		}
-		server->xwayland_ready.notify = handle_xwayland_ready;
-            wl_signal_add(&server->xwayland->events.ready, &server->xwayland_ready);
-            server->xwayland_new_surface.notify = handle_xwayland_new_surface;
-            wl_signal_add(&server->xwayland->events.new_surface, &server->xwayland_new_surface);
-            server->xwayland_destroy.notify = handle_xwayland_destroy;
-            wl_signal_add(&server->xwayland->events.destroy, &server->xwayland_destroy);
+    if (server->xwayland) {
+        if (server->xwayland->display_name) {
+            setenv("DISPLAY", server->xwayland->display_name, 1);
         }
-    #endif
+        server->xwayland_ready.notify = handle_xwayland_ready;
+        wl_signal_add(&server->xwayland->events.ready, &server->xwayland_ready);
+        server->xwayland_new_surface.notify = handle_xwayland_new_surface;
+        wl_signal_add(&server->xwayland->events.new_surface, &server->xwayland_new_surface);
+        server->xwayland_destroy.notify = handle_xwayland_destroy;
+        wl_signal_add(&server->xwayland->events.destroy, &server->xwayland_destroy);
+    }
+#endif
 
     return true;
 }
@@ -1192,6 +1342,7 @@ static bool find_binary(const char *name, char *out, size_t out_size) {
     free(copy);
     return found;
 }
+
 static bool process_running(const char *name) {
     if (!name || !*name) return false;
     DIR *dir = opendir("/proc");
@@ -1221,6 +1372,7 @@ static bool process_running(const char *name) {
     closedir(dir);
     return found;
 }
+
 static void ensure_portal_config(void) {
     char base[1024];
     const char *config_home = getenv("XDG_CONFIG_HOME");
@@ -1242,12 +1394,14 @@ static void ensure_portal_config(void) {
     fputs("org.freedesktop.impl.portal.Screenshot=wlr\n", fp);
     fclose(fp);
 }
+
 static void spawn_portal_if_present(const char *name) {
     char path[512];
     if (!find_binary(name, path, sizeof(path))) return;
     if (process_running(name)) return;
     input_spawn_command(path);
 }
+
 static void spawn_session_portals(void *data) {
     (void)data;
     if (!getenv("DBUS_SESSION_BUS_ADDRESS")) return;
@@ -1257,18 +1411,18 @@ static void spawn_session_portals(void *data) {
         spawn_portal_if_present("xdg-desktop-portal-wlr");
     }
     spawn_portal_if_present("xdg-desktop-portal-gtk");
-	spawn_portal_if_present("xdg-desktop-portal-kde");
-	spawn_portal_if_present("xdg-desktop-portal");
+    spawn_portal_if_present("xdg-desktop-portal-kde");
+    spawn_portal_if_present("xdg-desktop-portal");
 }
 
 static void spawn_exec_once(void *data) {
-	Server *server = data;
-	ConfigExecOnce *exec;
-	wl_list_for_each(exec, &server->config.exec_once, link) {
-		if (exec->command) {
-			input_spawn_command(exec->command);
-		}
-	}
+    Server *server = data;
+    ConfigExecOnce *exec;
+    wl_list_for_each(exec, &server->config.exec_once, link) {
+        if (exec->command) {
+            input_spawn_command(exec->command);
+        }
+    }
 }
 
 void server_run(Server *server) {
@@ -1278,25 +1432,29 @@ void server_run(Server *server) {
     if (!wlr_backend_start(server->backend)) exit(1);
 
     setenv("WAYLAND_DISPLAY", socket, 1);
+
     wl_event_loop_add_idle(server->loop, spawn_exec_once, server);
     wl_event_loop_add_idle(server->loop, spawn_session_portals, server);
+
     wl_display_run(server->display);
 }
 
 void server_destroy(Server *server) {
     if (!server) return;
     server->shutting_down = true;
+
     listener_remove(&server->focused_surface_destroy);
     server->focused_surface = NULL;
     server->focused_view = NULL;
+
     ext_workspace_destroy(server);
     layer_shell_destroy(server);
 
-    #if defined(WYO_HAS_XWAYLAND)
-        listener_remove(&server->xwayland_ready);
-        listener_remove(&server->xwayland_new_surface);
-        listener_remove(&server->xwayland_destroy);
-    #endif
+#if defined(WYO_HAS_XWAYLAND)
+    listener_remove(&server->xwayland_ready);
+    listener_remove(&server->xwayland_new_surface);
+    listener_remove(&server->xwayland_destroy);
+#endif
 
     while (!wl_list_empty(&server->outputs)) {
         Output *output = wl_container_of(server->outputs.next, output, link);
@@ -1319,27 +1477,32 @@ void server_destroy(Server *server) {
     wl_list_init(&server->popup_surfaces);
 
     workspaces_destroy(server);
-   	listener_remove(&server->new_output);
-	listener_remove(&server->new_toplevel);
-	listener_remove(&server->request_set_selection);
-	listener_remove(&server->xdg_activation_request_activate);
-	listener_remove(&server->constraint_destroy);
-	listener_remove(&server->new_constraint);
-	server->active_constraint = NULL;
+
+    listener_remove(&server->new_output);
+    listener_remove(&server->new_toplevel);
+    listener_remove(&server->request_set_selection);
+    listener_remove(&server->xdg_activation_request_activate);
+    listener_remove(&server->constraint_destroy);
+    listener_remove(&server->new_constraint);
+    server->active_constraint = NULL;
+
+    listener_remove(&server->output_manager_apply);
+    listener_remove(&server->output_manager_test);
+    listener_remove(&server->output_manager_destroy);
+
     input_destroy(server);
 
     if (server->reload_source) {
         wl_event_source_remove(server->reload_source);
         server->reload_source = NULL;
     }
-
     if (server->reload_fd >= 0) {
         close(server->reload_fd);
         server->reload_fd = -1;
     }
 
-  	listener_remove(&server->new_xdg_decoration);
-	listener_remove(&server->request_set_cursor_shape);
+    listener_remove(&server->new_xdg_decoration);
+    listener_remove(&server->request_set_cursor_shape);
 
     config_destroy(&server->config);
 
