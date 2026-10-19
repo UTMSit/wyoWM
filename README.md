@@ -214,7 +214,7 @@ Format: `animation = <type>, <enabled>, <duration_multiplier>, <curve>`
 |-------|-------------|
 | `<type>` | `windows` (geometry/movement) or `fade` (opacity/borders) |
 | `<enabled>` | `1` to enable, `0` to disable |
-| `<duration_multiplier>` | Duration in 100ms units (1=100ms, 2=200ms, 4=400ms) |
+| `duration` | duration in milliseconds (e.g. 200, 250) |
 | `<curve>` | Name of defined bezier curve or `default` |
 
 Example:
