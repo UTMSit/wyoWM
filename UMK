@@ -2,7 +2,9 @@ CC = gcc
 PKG_CONFIG = pkg-config
 PKG_MODULES = wayland-server wlroots-0.20 xkbcommon libinput libdrm gbm pixman-1 gdk-pixbuf-2.0 egl glesv2
 CFLAGS = -Isrc -O3 -Wall -Wextra -Werror -march=native -flto=auto -DWLR_USE_UNSTABLE $(shell $(PKG_CONFIG) --cflags $(PKG_MODULES))
-LDFLAGS = $(shell $(PKG_CONFIG) --libs $(PKG_MODULES)) -lm -ldl
+PKG_LIBS = $(shell $(PKG_CONFIG) --libs $(PKG_MODULES) | tr ' ' '\n' | grep -vx -e -ldl | tr '\n' ' ')
+DL_LIBS = $(shell uname -s | grep -qv -e NetBSD -e FreeBSD -e OpenBSD -e DragonFly -e Darwin && printf -- '-ldl' || :)
+LDFLAGS = $(PKG_LIBS) -lm $(DL_LIBS)
 SRCS = $(wildcard src/*.c)
 OBJS = $(SRCS:.c=.o)
 src/%.o: src/%.c
