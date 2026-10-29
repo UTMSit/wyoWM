@@ -11,7 +11,11 @@
 #include <fcntl.h>
 #include <dirent.h>
 #include <sys/stat.h>
+#ifdef __NetBSD__
+#include "server_netbsd.h"
+#else
 #include <sys/signalfd.h>
+#endif
 #include <wlr/types/wlr_xdg_decoration_v1.h>
 #include <wlr/types/wlr_viewporter.h>
 #include <wlr/types/wlr_xdg_activation_v1.h>
@@ -32,12 +36,14 @@
 #include <drm_fourcc.h>
 #include <wlr/types/wlr_tearing_control_v1.h>
 
+#ifndef __NetBSD__
 #ifndef SFD_NONBLOCK
 #define SFD_NONBLOCK O_NONBLOCK
 #endif
 
 #ifndef SFD_CLOEXEC
 #define SFD_CLOEXEC O_CLOEXEC
+#endif
 #endif
 
 static inline void listener_remove(struct wl_listener *listener) {
@@ -301,6 +307,7 @@ void server_reload_config(Server *server) {
     reload_config(server);
 }
 
+#ifndef __NetBSD__
 static int handle_reload_fd(int fd, uint32_t mask, void *data) {
     Server *server = data;
     if (mask & WL_EVENT_READABLE) {
@@ -319,6 +326,7 @@ static int handle_reload_fd(int fd, uint32_t mask, void *data) {
     }
     return 0;
 }
+#endif
 
 static void handle_decoration_destroy(struct wl_listener *listener, void *data) {
     View *view = wl_container_of(listener, view, decoration_destroy);
@@ -1271,26 +1279,30 @@ if (config_default_path(config_path, sizeof(config_path))) {
     server->new_toplevel.notify = handle_new_toplevel;
     wl_signal_add(&server->xdg_shell->events.new_toplevel, &server->new_toplevel);
 
-    sigset_t reload_mask;
-    (void)sigemptyset(&reload_mask);
-    (void)sigaddset(&reload_mask, SIGUSR1);
-    (void)sigprocmask(SIG_BLOCK, &reload_mask, NULL);
+    #ifdef __NetBSD__
+        if (!server_netbsd_reload_init(server)) return false;
+    #else
+        sigset_t reload_mask;
+        (void)sigemptyset(&reload_mask);
+        (void)sigaddset(&reload_mask, SIGUSR1);
+        (void)sigprocmask(SIG_BLOCK, &reload_mask, NULL);
 
-    server->reload_fd = signalfd(-1, &reload_mask, SFD_NONBLOCK | SFD_CLOEXEC);
-    if (server->reload_fd < 0) return false;
+        server->reload_fd = signalfd(-1, &reload_mask, SFD_NONBLOCK | SFD_CLOEXEC);
+        if (server->reload_fd < 0) return false;
 
-    server->reload_source = wl_event_loop_add_fd(
-        server->loop,
-        server->reload_fd,
-        WL_EVENT_READABLE,
-        handle_reload_fd,
-        server
-    );
-    if (!server->reload_source) {
-        close(server->reload_fd);
-        server->reload_fd = -1;
-        return false;
-    }
+        server->reload_source = wl_event_loop_add_fd(
+            server->loop,
+            server->reload_fd,
+            WL_EVENT_READABLE,
+            handle_reload_fd,
+            server
+        );
+        if (!server->reload_source) {
+            close(server->reload_fd);
+            server->reload_fd = -1;
+            return false;
+        }
+    #endif
 
     char ipc_path[1024];
     const char *runtime_dir = getenv("XDG_RUNTIME_DIR");
@@ -1511,14 +1523,18 @@ void server_destroy(Server *server) {
 
     input_destroy(server);
 
-    if (server->reload_source) {
-        wl_event_source_remove(server->reload_source);
-        server->reload_source = NULL;
-    }
-    if (server->reload_fd >= 0) {
-        close(server->reload_fd);
-        server->reload_fd = -1;
-    }
+    #ifdef __NetBSD__
+        server_netbsd_reload_destroy(server);
+    #else
+        if (server->reload_source) {
+            wl_event_source_remove(server->reload_source);
+            server->reload_source = NULL;
+        }
+        if (server->reload_fd >= 0) {
+            close(server->reload_fd);
+            server->reload_fd = -1;
+        }
+    #endif
 
     listener_remove(&server->new_xdg_decoration);
     listener_remove(&server->request_set_cursor_shape);
