@@ -29,19 +29,19 @@ update:
 	call install
 eoc
 install:
-	sudo install -Dm755 wyowm /usr/local/bin/wyowm
-	sudo install -Dm755 wyoctl /usr/local/bin/wyoctl
-	sudo install -Dm755 wyowm-session /usr/local/bin/wyowm-session
-	sudo install -Dm755 wyowm-session-nested /usr/local/bin/wyowm-session-nested
-	sudo install -Dm755 wyoconf-reload /usr/local/bin/wyoconf-reload
+	sudo install -Dm755 wyowm /usr/bin/wyowm
+	sudo install -Dm755 wyoctl /usr/bin/wyoctl
+	sudo install -Dm755 wyowm-session /usr/bin/wyowm-session
+	sudo install -Dm755 wyowm-session-nested /usr/bin/wyowm-session-nested
+	sudo install -Dm755 wyoconf-reload /usr/bin/wyoconf-reload
 	sudo install -Dm644 wyowm.desktop /usr/share/wayland-sessions/wyowm.desktop
 eoc
 uninstall:
-	sudo rm -f /usr/local/bin/wyowm
-	sudo rm -f /usr/local/bin/wyoctl
-	sudo rm -f /usr/local/bin/wyowm-session
-	sudo rm -f /usr/local/bin/wyowm-session-nested
-	sudo rm -f /usr/local/bin/wyoconf-reload
+	sudo rm -f /usr/bin/wyowm
+	sudo rm -f /usr/bin/wyoctl
+	sudo rm -f /usr/bin/wyowm-session
+	sudo rm -f /usr/bin/wyowm-session-nested
+	sudo rm -f /usr/bin/wyoconf-reload
 	sudo rm -f /usr/share/wayland-sessions/wyowm.desktop
 eoc
 clean:
