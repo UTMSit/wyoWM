@@ -18,6 +18,19 @@
 #include <wlr/types/wlr_pointer.h>
 #include <math.h>
 
+#ifdef __NetBSD__
+#include <dev/wscons/wsconsio.h>
+#include <sys/ioctl.h>
+static bool netbsd_switch_screen(unsigned vt) {
+    int fd = open("/dev/ttyE0", O_RDWR | O_CLOEXEC);
+    if (fd < 0) return false;
+    int screen = (int)vt - 1;
+    int ret = ioctl(fd, WSDISPLAYIO_SACTIVATE, &screen);
+    close(fd);
+    return ret == 0;
+}
+#endif
+
 #define BIND_MODIFIER_MASK (WLR_MODIFIER_SHIFT | WLR_MODIFIER_CTRL | WLR_MODIFIER_ALT | WLR_MODIFIER_LOGO)
 
 static inline void listener_remove(struct wl_listener *listener) {
@@ -349,7 +362,9 @@ static bool handle_keybind_action(Server *server, const ConfigKeybind *bind) {
         }
 
         case ACTION_SWITCH_VT:
-    #ifndef __NetBSD__
+    #ifdef __NetBSD__
+            netbsd_switch_screen((unsigned)bind->arg);
+    #else
             if (server->session) {
                 wlr_session_change_vt(server->session, (unsigned)bind->arg);
             }
@@ -1227,8 +1242,18 @@ static void handle_cursor_button(struct wl_listener *listener, void *data) {
 	wlr_seat_pointer_notify_frame(server->seat);
    }
 
+   #ifdef __NetBSD__
+   #include <dev/wscons/wsconsio.h>
+   static bool netbsd_switch_screen(unsigned vt) {
+       int fd = open("/dev/ttyE0", O_RDWR | O_CLOEXEC);
+       if (fd < 0) return false;
+       int screen = (int)vt - 1;
+       int ret = ioctl(fd, WSDISPLAYIO_SACTIVATE, &screen);
+       close(fd);
+       return ret == 0;
+   }
+   #endif
 
-   #ifndef __NetBSD__
    static int vt_from_keycode(uint32_t keycode) {
        switch (keycode) {
        case KEY_F1: return 1;
@@ -1246,7 +1271,6 @@ static void handle_cursor_button(struct wl_listener *listener, void *data) {
        default: return 0;
        }
    }
-   #endif
 
 static void handle_key(struct wl_listener *listener, void *data) {
     Keyboard *keyboard = wl_container_of(listener, keyboard, key);
@@ -1273,17 +1297,23 @@ static void handle_key(struct wl_listener *listener, void *data) {
 
         handled = handle_keybind_event(server, modifiers, event->keycode, syms, nsyms);
 
-        #ifndef __NetBSD__
-                if (!handled) {
-                    if ((modifiers & BIND_MODIFIER_MASK) == (WLR_MODIFIER_CTRL | WLR_MODIFIER_ALT)) {
-                        int vt = vt_from_keycode(event->keycode);
-                        if (vt > 0 && server->session) {
-                            wlr_session_change_vt(server->session, (unsigned)vt);
-                            handled = true;
-                        }
+        if (!handled) {
+            if ((modifiers & BIND_MODIFIER_MASK) == (WLR_MODIFIER_CTRL | WLR_MODIFIER_ALT)) {
+                int vt = vt_from_keycode(event->keycode);
+                if (vt > 0) {
+#ifdef __NetBSD__
+                    if (netbsd_switch_screen((unsigned)vt)) {
+                        handled = true;
                     }
+#else
+                    if (server->session) {
+                        wlr_session_change_vt(server->session, (unsigned)vt);
+                        handled = true;
+                    }
+#endif
                 }
-        #endif
+            }
+        }
 
                 if (!handled) {
         #ifdef __NetBSD__
