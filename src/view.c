@@ -22,6 +22,7 @@ static void handle_request_resize(struct wl_listener *listener, void *data);
 static void handle_new_popup(struct wl_listener *listener, void *data);
 static void handle_scene_node_destroy(struct wl_listener *listener, void *data);
 static void check_sticky(View *view);
+static void handle_surface_destroy(struct wl_listener *listener, void *data);
 
 typedef void (*scene_node_corner_radius_fn)(struct wlr_scene_node *node, float radius);
 typedef void (*scene_buffer_corner_radius_fn)(struct wlr_scene_buffer *buffer, float radius);
@@ -859,6 +860,15 @@ View *view_create_xwayland(Server *server, struct wlr_xwayland_surface *xsurface
 
 #endif
 
+static void handle_surface_destroy(struct wl_listener *listener, void *data) {
+    View *view = wl_container_of(listener, view, xdg.surface_destroy);
+    (void)data;
+    listener_remove(&view->xdg.commit);
+    listener_remove(&view->xdg.map);
+    listener_remove(&view->xdg.unmap);
+    listener_remove(&view->xdg.surface_destroy);
+}
+
 View *view_create_xdg(Server *server, struct wlr_xdg_surface *xdg_surface, struct wlr_xdg_toplevel *toplevel) {
     View *view = calloc(1, sizeof(View));
     if (!view) return NULL;
@@ -921,6 +931,9 @@ View *view_create_xdg(Server *server, struct wlr_xdg_surface *xdg_surface, struc
 	wl_list_init(&view->xdg.request_move.link);
     wl_list_init(&view->xdg.request_resize.link);
     wl_list_init(&view->xdg.new_popup.link);
+    wl_list_init(&view->xdg.surface_destroy.link);
+    view->xdg.surface_destroy.notify = handle_surface_destroy;
+    wl_signal_add(&xdg_surface->surface->events.destroy, &view->xdg.surface_destroy);
     wl_list_init(&view->set_title.link);
     wl_list_init(&view->set_app_id.link);
 
@@ -997,6 +1010,7 @@ void view_destroy(View *view) {
 
     if (view->type == VIEW_TYPE_XDG && view->xdg.listeners_initialized) {
 		listener_remove(&view->decoration_request_mode);
+		listener_remove(&view->xdg.surface_destroy);
 		listener_remove(&view->xdg.map);
 		listener_remove(&view->xdg.unmap);
 		listener_remove(&view->xdg.destroy);
@@ -1074,6 +1088,7 @@ void view_cleanup_for_shutdown(View *view) {
 
    	if (view->type == VIEW_TYPE_XDG && view->xdg.listeners_initialized) {
 		listener_remove(&view->decoration_request_mode);
+		listener_remove(&view->xdg.surface_destroy);
 		listener_remove(&view->xdg.map);
 		listener_remove(&view->xdg.unmap);
 		listener_remove(&view->xdg.destroy);

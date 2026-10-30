@@ -7,6 +7,8 @@
 #include <wlr/types/wlr_xdg_shell.h>
 #include <wlr/util/box.h>
 
+static void handle_layer_surface_destroy(struct wl_listener *listener, void *data);
+
 static inline void listener_remove(struct wl_listener *listener) {
     if (!wl_list_empty(&listener->link)) {
         wl_list_remove(&listener->link);
@@ -59,6 +61,7 @@ if (layer->server && layer->layer_surface &&
     layer->server->focused_surface == layer->layer_surface->surface) {
 server_focus_surface(layer->server, NULL);
 }
+listener_remove(&layer->surface_destroy);
 listener_remove(&layer->map);
 listener_remove(&layer->unmap);
 listener_remove(&layer->destroy);
@@ -119,6 +122,9 @@ static void handle_new_layer_surface(struct wl_listener *listener, void *data) {
     wl_list_init(&layer->destroy.link);
     wl_list_init(&layer->commit.link);
     wl_list_init(&layer->new_popup.link);
+    wl_list_init(&layer->surface_destroy.link);
+    layer->surface_destroy.notify = handle_layer_surface_destroy;
+    wl_signal_add(&layer_surface->surface->events.destroy, &layer->surface_destroy);
 
     layer->map.notify = handle_layer_map;
     wl_signal_add(&layer_surface->surface->events.map, &layer->map);
@@ -156,6 +162,7 @@ void layer_shell_destroy(Server *server) {
     LayerSurface *tmp;
 
     wl_list_for_each_safe(layer, tmp, &server->layer_surfaces, link) {
+        listener_remove(&layer->surface_destroy);
         listener_remove(&layer->map);
         listener_remove(&layer->unmap);
         listener_remove(&layer->destroy);
@@ -245,4 +252,13 @@ bool layer_shell_arrange(Server *server) {
     }
 
     return changed;
+}
+
+static void handle_layer_surface_destroy(struct wl_listener *listener, void *data) {
+    LayerSurface *layer = wl_container_of(listener, layer, surface_destroy);
+    (void)data;
+    listener_remove(&layer->commit);
+    listener_remove(&layer->map);
+    listener_remove(&layer->unmap);
+    listener_remove(&layer->surface_destroy);
 }

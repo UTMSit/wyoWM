@@ -86,6 +86,7 @@ typedef struct View {
 			struct wl_listener request_move;
             struct wl_listener request_resize;
             struct wl_listener new_popup;
+            struct wl_listener surface_destroy;
             bool listeners_initialized;
         } xdg;
 

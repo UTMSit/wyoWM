@@ -2,10 +2,10 @@
 rm -f /tmp/wyowm.log /tmp/wyowm-spawn.log
 
 if [ -z "$XDG_RUNTIME_DIR" ]; then
-	XDG_RUNTIME_DIR="/run/user/$(id -u)"
-	export XDG_RUNTIME_DIR
-	mkdir -p "$XDG_RUNTIME_DIR"
-	chmod 700 "$XDG_RUNTIME_DIR"
+    XDG_RUNTIME_DIR="/run/user/$(id -u)"
+    export XDG_RUNTIME_DIR
+    mkdir -p "$XDG_RUNTIME_DIR"
+    chmod 700 "$XDG_RUNTIME_DIR"
 fi
 
 export XDG_SESSION_TYPE=wayland
@@ -22,14 +22,18 @@ export XCURSOR_SIZE=24
 export XCURSOR_THEME=Adwaita
 export XCURSOR_PATH="$HOME/.local/share/icons:$HOME/.icons:/usr/share/icons:/usr/share/pixmaps"
 
+if [ -d "/usr/pkg/bin" ]; then
+    export PATH="/usr/pkg/bin:/usr/pkg/sbin:$PATH"
+fi
+
 unset WAYLAND_DISPLAY
 unset DISPLAY
 
 if [ -d "/tmp/.X11-unix" ]; then
-	for f in /tmp/.X11-unix/X*; do
-		[ -e "$f" ] && rm -f "$f" 2>/dev/null || true
-	done
+    for f in /tmp/.X11-unix/X*; do
+        [ -e "$f" ] && rm -f "$f" 2>/dev/null || true
+    done
 fi
 
 export WLR_BACKEND=drm
-exec dbus-run-session /usr/local/bin/wyowm >/tmp/wyowm.log 2>&1
+exec dbus-run-session wyowm >/tmp/wyowm.log 2>&1

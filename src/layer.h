@@ -18,6 +18,7 @@ struct wl_listener unmap;
 struct wl_listener destroy;
 struct wl_listener commit;
 struct wl_listener new_popup;
+struct wl_listener surface_destroy;
 struct wl_list link;
 bool mapped;
 bool initial_configure_sent;
