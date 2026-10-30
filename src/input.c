@@ -20,6 +20,10 @@
 
 #define BIND_MODIFIER_MASK (WLR_MODIFIER_SHIFT | WLR_MODIFIER_CTRL | WLR_MODIFIER_ALT | WLR_MODIFIER_LOGO)
 
+#ifdef __NetBSD__
+static bool netbsd_switch_screen(unsigned vt);
+#endif
+
 static inline void listener_remove(struct wl_listener *listener) {
     if (!wl_list_empty(&listener->link)) {
         wl_list_remove(&listener->link);
