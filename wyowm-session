@@ -2,7 +2,7 @@
 rm -f /tmp/wyowm.log /tmp/wyowm-spawn.log
 
 if [ -z "$XDG_RUNTIME_DIR" ]; then
-    XDG_RUNTIME_DIR="/run/user/$(id -u)"
+    XDG_RUNTIME_DIR="/tmp/xdg-runtime-$(id -u)"
     export XDG_RUNTIME_DIR
     mkdir -p "$XDG_RUNTIME_DIR"
     chmod 700 "$XDG_RUNTIME_DIR"
