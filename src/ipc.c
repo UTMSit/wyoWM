@@ -221,8 +221,18 @@ static int ipc_listen_fd(int fd, uint32_t mask, void *data) {
     if (!ipc) return 0;
 
     if (mask & WL_EVENT_READABLE) {
-        int client_fd = accept4(fd, NULL, NULL, SOCK_NONBLOCK | SOCK_CLOEXEC);
-        if (client_fd < 0) return 0;
+        #ifdef __NetBSD__
+                int client_fd = accept(fd, NULL, NULL);
+                if (client_fd >= 0) {
+                    int fl = fcntl(client_fd, F_GETFL, 0);
+                    if (fl >= 0) fcntl(client_fd, F_SETFL, fl | O_NONBLOCK);
+                    int fd_fl = fcntl(client_fd, F_GETFD, 0);
+                    if (fd_fl >= 0) fcntl(client_fd, F_SETFD, fd_fl | FD_CLOEXEC);
+                }
+        #else
+                int client_fd = accept4(fd, NULL, NULL, SOCK_NONBLOCK | SOCK_CLOEXEC);
+        #endif
+                if (client_fd < 0) return 0;
 
         IPCClient *client = calloc(1, sizeof(IPCClient));
         if (!client) {

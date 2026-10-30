@@ -944,8 +944,6 @@ View *view_create_xdg(Server *server, struct wlr_xdg_surface *xdg_surface, struc
 	view->xdg.request_fullscreen.notify = handle_request_fullscreen;
 	wl_signal_add(&toplevel->events.request_fullscreen, &view->xdg.request_fullscreen);
 	view->xdg.request_move.notify = handle_request_move;
-
-    view->xdg.request_move.notify = handle_request_move;
     wl_signal_add(&toplevel->events.request_move, &view->xdg.request_move);
 
     view->xdg.request_resize.notify = handle_request_resize;
@@ -986,7 +984,18 @@ void view_destroy(View *view) {
         server_view_destroyed(server, view);
     }
 
-   	if (view->type == VIEW_TYPE_XDG && view->xdg.listeners_initialized) {
+    view->closing = false;
+    view->closing_output = NULL;
+    if (view->closing_scene) {
+        wlr_scene_node_destroy(&view->closing_scene->node);
+        view->closing_scene = NULL;
+    }
+    if (view->close_buffer) {
+        wlr_buffer_unlock(view->close_buffer);
+        view->close_buffer = NULL;
+    }
+
+    if (view->type == VIEW_TYPE_XDG && view->xdg.listeners_initialized) {
 		listener_remove(&view->decoration_request_mode);
 		listener_remove(&view->xdg.map);
 		listener_remove(&view->xdg.unmap);

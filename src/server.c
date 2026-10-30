@@ -12,6 +12,11 @@
 #include <dirent.h>
 #include <sys/stat.h>
 #ifdef __NetBSD__
+#include <sys/param.h>
+#include <sys/sysctl.h>
+#endif
+#include "render.h"
+#ifdef __NetBSD__
 #include "server_netbsd.h"
 #else
 #include <sys/signalfd.h>
@@ -1344,6 +1349,11 @@ if (config_default_path(config_path, sizeof(config_path))) {
 static bool find_binary(const char *name, char *out, size_t out_size) {
     if (!name || !*name || !out || out_size == 0) return false;
     const char *dirs[] = {
+#ifdef __NetBSD__
+        "/usr/pkg/bin",
+        "/usr/pkg/sbin",
+        "/usr/pkg/libexec",
+#endif
         "/usr/libexec",
         "/usr/lib",
         "/usr/local/libexec",
@@ -1376,6 +1386,36 @@ static bool find_binary(const char *name, char *out, size_t out_size) {
 
 static bool process_running(const char *name) {
     if (!name || !*name) return false;
+#ifdef __NetBSD__
+    int mib[6];
+    mib[0] = CTL_KERN;
+    mib[1] = KERN_PROC2;
+    mib[2] = KERN_PROC_ALL;
+    mib[3] = 0;
+    mib[4] = sizeof(struct kinfo_proc2);
+    mib[5] = 0;
+    size_t len = 0;
+    if (sysctl(mib, 6, NULL, &len, NULL, 0) < 0) return false;
+    struct kinfo_proc2 *procs = malloc(len);
+    if (!procs) return false;
+    mib[5] = (int)(len / sizeof(struct kinfo_proc2));
+    if (sysctl(mib, 6, procs, &len, NULL, 0) < 0) {
+        free(procs);
+        return false;
+    }
+    int count = (int)(len / sizeof(struct kinfo_proc2));
+    size_t name_len = strlen(name);
+    bool found = false;
+    for (int i = 0; i < count; i++) {
+        if (strlen(procs[i].p_comm) == name_len &&
+            strncmp(procs[i].p_comm, name, name_len) == 0) {
+            found = true;
+            break;
+        }
+    }
+    free(procs);
+    return found;
+#else
     DIR *dir = opendir("/proc");
     if (!dir) return false;
     size_t name_len = strlen(name);
@@ -1402,6 +1442,7 @@ static bool process_running(const char *name) {
     }
     closedir(dir);
     return found;
+#endif
 }
 
 static void ensure_portal_config(void) {
@@ -1473,7 +1514,7 @@ void server_run(Server *server) {
 void server_destroy(Server *server) {
     if (!server) return;
     server->shutting_down = true;
-
+    render_cleanup(server);
     listener_remove(&server->focused_surface_destroy);
     server->focused_surface = NULL;
     server->focused_view = NULL;

@@ -13,7 +13,7 @@
 #include <errno.h>
 #include <sys/wait.h>
 #include <limits.h>
-#include <linux/input-event-codes.h>
+#include "compat.h"
 #include <xkbcommon/xkbcommon.h>
 #include <wlr/types/wlr_pointer.h>
 #include <math.h>
@@ -348,11 +348,13 @@ static bool handle_keybind_action(Server *server, const ConfigKeybind *bind) {
             return true;
         }
 
-    case ACTION_SWITCH_VT:
-        if (server->session) {
-            wlr_session_change_vt(server->session, (unsigned)bind->arg);
-        }
-        return true;
+        case ACTION_SWITCH_VT:
+    #ifndef __NetBSD__
+            if (server->session) {
+                wlr_session_change_vt(server->session, (unsigned)bind->arg);
+            }
+    #endif
+            return true;
 
     case ACTION_TOGGLE_FLOATING: {
         View *view = server->focused_view;
@@ -1226,23 +1228,25 @@ static void handle_cursor_button(struct wl_listener *listener, void *data) {
    }
 
 
-static int vt_from_keycode(uint32_t keycode) {
-    switch (keycode) {
-    case KEY_F1: return 1;
-    case KEY_F2: return 2;
-    case KEY_F3: return 3;
-    case KEY_F4: return 4;
-    case KEY_F5: return 5;
-    case KEY_F6: return 6;
-    case KEY_F7: return 7;
-    case KEY_F8: return 8;
-    case KEY_F9: return 9;
-    case KEY_F10: return 10;
-    case KEY_F11: return 11;
-    case KEY_F12: return 12;
-    default: return 0;
-    }
-}
+   #ifndef __NetBSD__
+   static int vt_from_keycode(uint32_t keycode) {
+       switch (keycode) {
+       case KEY_F1: return 1;
+       case KEY_F2: return 2;
+       case KEY_F3: return 3;
+       case KEY_F4: return 4;
+       case KEY_F5: return 5;
+       case KEY_F6: return 6;
+       case KEY_F7: return 7;
+       case KEY_F8: return 8;
+       case KEY_F9: return 9;
+       case KEY_F10: return 10;
+       case KEY_F11: return 11;
+       case KEY_F12: return 12;
+       default: return 0;
+       }
+   }
+   #endif
 
 static void handle_key(struct wl_listener *listener, void *data) {
     Keyboard *keyboard = wl_container_of(listener, keyboard, key);
@@ -1269,24 +1273,37 @@ static void handle_key(struct wl_listener *listener, void *data) {
 
         handled = handle_keybind_event(server, modifiers, event->keycode, syms, nsyms);
 
-        if (!handled) {
-            if ((modifiers & BIND_MODIFIER_MASK) == (WLR_MODIFIER_CTRL | WLR_MODIFIER_ALT)) {
-                int vt = vt_from_keycode(event->keycode);
-
-                if (vt > 0 && server->session) {
-                    wlr_session_change_vt(server->session, (unsigned)vt);
-                    handled = true;
+        #ifndef __NetBSD__
+                if (!handled) {
+                    if ((modifiers & BIND_MODIFIER_MASK) == (WLR_MODIFIER_CTRL | WLR_MODIFIER_ALT)) {
+                        int vt = vt_from_keycode(event->keycode);
+                        if (vt > 0 && server->session) {
+                            wlr_session_change_vt(server->session, (unsigned)vt);
+                            handled = true;
+                        }
+                    }
                 }
-            }
-        }
+        #endif
 
-        if (!handled) {
-            if ((modifiers & BIND_MODIFIER_MASK) == WLR_MODIFIER_LOGO &&
-                event->keycode == KEY_ESC) {
-                wl_display_terminate(server->display);
-                handled = true;
-            }
-        }
+                if (!handled) {
+        #ifdef __NetBSD__
+                    if ((modifiers & BIND_MODIFIER_MASK) == WLR_MODIFIER_LOGO && syms && nsyms > 0) {
+                        for (int i = 0; i < nsyms; i++) {
+                            if (syms[i] == XKB_KEY_Escape) {
+                                wl_display_terminate(server->display);
+                                handled = true;
+                                break;
+                            }
+                        }
+                    }
+        #else
+                    if ((modifiers & BIND_MODIFIER_MASK) == WLR_MODIFIER_LOGO &&
+                        event->keycode == KEY_ESC) {
+                        wl_display_terminate(server->display);
+                        handled = true;
+                    }
+        #endif
+                }
     }
 
     if (!handled) {

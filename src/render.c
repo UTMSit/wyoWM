@@ -1231,3 +1231,19 @@ bool output_render_custom(struct Output *output) {
 
 	return render_direct(output);
 }
+
+void render_cleanup(Server *server) {
+    (void)server;
+    if (g_backdrop) {
+        wlr_buffer_unlock(g_backdrop);
+        g_backdrop = NULL;
+        g_backdrop_w = 0;
+        g_backdrop_h = 0;
+    }
+    if (g_blurred) {
+        wlr_buffer_unlock(g_blurred);
+        g_blurred = NULL;
+        g_blurred_w = 0;
+        g_blurred_h = 0;
+    }
+}
