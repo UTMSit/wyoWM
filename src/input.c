@@ -18,19 +18,6 @@
 #include <wlr/types/wlr_pointer.h>
 #include <math.h>
 
-#ifdef __NetBSD__
-#include <dev/wscons/wsconsio.h>
-#include <sys/ioctl.h>
-static bool netbsd_switch_screen(unsigned vt) {
-    int fd = open("/dev/ttyE0", O_RDWR | O_CLOEXEC);
-    if (fd < 0) return false;
-    int screen = (int)vt - 1;
-    int ret = ioctl(fd, WSDISPLAYIO_SACTIVATE, &screen);
-    close(fd);
-    return ret == 0;
-}
-#endif
-
 #define BIND_MODIFIER_MASK (WLR_MODIFIER_SHIFT | WLR_MODIFIER_CTRL | WLR_MODIFIER_ALT | WLR_MODIFIER_LOGO)
 
 static inline void listener_remove(struct wl_listener *listener) {
@@ -1243,12 +1230,12 @@ static void handle_cursor_button(struct wl_listener *listener, void *data) {
    }
 
    #ifdef __NetBSD__
-   #include <dev/wscons/wsconsio.h>
+   #include <dev/wscons/wsdisplay_usl_io.h>
+   #include <sys/ioctl.h>
    static bool netbsd_switch_screen(unsigned vt) {
        int fd = open("/dev/ttyE0", O_RDWR | O_CLOEXEC);
        if (fd < 0) return false;
-       int screen = (int)vt - 1;
-       int ret = ioctl(fd, WSDISPLAYIO_SACTIVATE, &screen);
+       int ret = ioctl(fd, VT_ACTIVATE, (unsigned long)vt);
        close(fd);
        return ret == 0;
    }
